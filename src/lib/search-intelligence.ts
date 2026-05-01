@@ -20,6 +20,8 @@ const GROCERY_SYNONYM_GROUPS = [
   ['chilli', 'chili'],
   ['garbanzo', 'chickpea', 'chick peas'],
   ['coriander', 'cilantro'],
+  ['free range', 'free-range'],
+  ['cage free', 'cage-free'],
 ];
 
 const TOKEN_EQUIVALENTS: Record<string, string[]> = {
@@ -47,6 +49,13 @@ const GENERAL_RETAILERS = new Set(['Officeworks']);
 export const MARKETPLACE_RETAILERS = new Set(['Amazon AU']);
 
 const CATEGORY_PROFILES = [
+  {
+    id: 'eggs',
+    anchors: ['egg', 'eggs'],
+    positive: ['egg', 'eggs', 'free', 'range', 'cage', 'dozen', 'large', 'extra', 'fresh'],
+    negative: ['incubator', 'incubators', 'candler', 'turning', 'tray', 'trays', 'poacher', 'poachers'],
+    discouraging: ['chocolate', 'easter', 'toy'],
+  },
   {
     id: 'yoghurt',
     anchors: ['yoghurt', 'yogurt', 'greek', 'skyr'],
@@ -268,6 +277,15 @@ export function generateQueryVariants(query: string): string[] {
   if (coreTokens.includes('bread')) {
     variants.push(tokens.filter((token) => token !== 'loaf').join(' '));
   }
+  if (intent.categoryId === 'eggs') {
+    variants.push('free range eggs');
+    variants.push('eggs');
+    variants.push(normalized.replace(/\b12 pack\b/g, '12 eggs'));
+    variants.push(normalized.replace(/\beggs 12 pack\b/g, '12 eggs'));
+    variants.push(normalized.replace(/\bfree range eggs 12 pack\b/g, 'free range eggs'));
+    variants.push(normalized.replace(/\bfree range eggs\b/g, '12 free range eggs'));
+    variants.push(normalized.replace(/\bcage free\b/g, 'free range'));
+  }
   if (intent.categoryId === 'oil') {
     variants.push('olive oil');
     variants.push('extra virgin olive oil');
@@ -392,7 +410,7 @@ export function scoreProduct(result: ProductResult, query: string): number {
     else if (MARKETPLACE_RETAILERS.has(result.retailer)) score -= 14;
   }
 
-  if (intent.categoryId === 'yoghurt' || intent.categoryId === 'milk' || intent.categoryId === 'bread' || intent.categoryId === 'dal' || intent.categoryId === 'oil') {
+  if (intent.categoryId === 'yoghurt' || intent.categoryId === 'milk' || intent.categoryId === 'bread' || intent.categoryId === 'dal' || intent.categoryId === 'oil' || intent.categoryId === 'eggs') {
     if (GROCERY_FIRST_RETAILERS.has(result.retailer)) score += 12;
     if (GENERAL_RETAILERS.has(result.retailer)) score -= 10;
     if (MARKETPLACE_RETAILERS.has(result.retailer)) score -= 8;
@@ -450,6 +468,11 @@ export function rankRetailerResults(results: ProductResult[], query: string): Pr
         const queryNeedsOlive = profile.queryTokens.includes('olive');
         const productHasOlive = profile.productTokens.some((productToken) => areTokensEquivalent('olive', productToken));
         if (queryNeedsOlive && !productHasOlive) return false;
+      }
+      if (profile.intent.categoryId === 'eggs') {
+        const hasEggAccessory = ['incubator', 'incubators', 'candler', 'turning', 'tray', 'trays', 'poacher', 'poachers']
+          .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
+        if (hasEggAccessory) return false;
       }
       if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) return false;
       if (profile.intent.anchorTokens.length > 0 && profile.matchedTokens.length === 0) return false;

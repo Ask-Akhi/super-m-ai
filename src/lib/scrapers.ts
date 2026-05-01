@@ -135,6 +135,20 @@ function getDistinctiveQueryTokens(query: string): string[] {
     .filter((token) => token.length >= 4 && !GENERIC_BRANDLESS_TOKENS.has(token));
 }
 
+function isSpecificStapleQuery(query: string): boolean {
+  const normalized = normalizeSearchText(query);
+  const tokens = normalized.split(' ').filter(Boolean);
+  const hasCountOrSize = /\b\d+\s?(pack|pk|count|ct|x)?\b/.test(normalized);
+  const hasStructuredFoodPhrase =
+    normalized.includes('free range')
+    || normalized.includes('cage free')
+    || normalized.includes('greek')
+    || normalized.includes('extra virgin')
+    || normalized.includes('barista');
+
+  return tokens.length >= 3 && (hasCountOrSize || hasStructuredFoodPhrase);
+}
+
 function resultsContainDistinctiveTokens(query: string, results: ProductResult[]): boolean {
   const distinctiveTokens = getDistinctiveQueryTokens(query);
   if (distinctiveTokens.length === 0) return results.length > 0;
@@ -774,15 +788,19 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
     GROCERY_RETAILERS.has(retailer)
     && result.status === 'empty'
     && getDistinctiveQueryTokens(query).length > 0;
+  const shouldTryStapleIndexedFallback =
+    GROCERY_RETAILERS.has(retailer)
+    && result.status === 'empty'
+    && isSpecificStapleQuery(query);
 
   // Only use Google Shopping when the retailer request failed outright,
   // or when a branded supermarket query came back empty and we need a safer indexed fallback.
-  if ((result.status === 'error' || shouldTryBrandedIndexedFallback) && GROCERY_RETAILERS.has(retailer)) {
+  if ((result.status === 'error' || shouldTryBrandedIndexedFallback || shouldTryStapleIndexedFallback) && GROCERY_RETAILERS.has(retailer)) {
     try {
       const domain = RETAILER_DOMAIN[retailer];
       const gSearch = await scrapeGoogleShopping(query, domain);
       const taggedResults = gSearch.results.map((r) => ({ ...r, retailer, storeBranch: 'via Google Shopping' }));
-      if (resultsContainDistinctiveTokens(query, taggedResults)) {
+      if (resultsContainDistinctiveTokens(query, taggedResults) || shouldTryStapleIndexedFallback) {
         // Tag results with correct retailer
         return {
           retailer,
@@ -790,7 +808,9 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
           status: 'ok',
           message: result.status === 'error'
             ? 'Results via Google Shopping fallback'
-            : 'Results via indexed retailer fallback',
+            : shouldTryBrandedIndexedFallback
+              ? 'Results via indexed retailer fallback'
+              : 'Results via staple retailer fallback',
         };
       }
     } catch { /* ignore */ }
