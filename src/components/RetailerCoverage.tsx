@@ -4,10 +4,10 @@ import { RETAILERS } from '@/lib/retailers';
 import { RetailerName } from '@/types';
 
 const STATUS_META = {
-  ok:      { icon: '✅', label: 'Found',    color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
-  empty:   { icon: '🔍', label: 'Not found', color: 'text-slate-400',   bg: 'bg-white/5 border-white/10' },
-  blocked: { icon: '🚫', label: 'Blocked',   color: 'text-orange-400',  bg: 'bg-orange-500/10 border-orange-500/20' },
-  error:   { icon: '⚠️', label: 'Error',     color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/20' },
+  ok:      { icon: '✅', label: 'Found',      color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
+  empty:   { icon: '🔍', label: 'Not found',  color: 'text-slate-400',   bg: 'bg-white/5 border-white/10' },
+  blocked: { icon: '🔒', label: 'Restricted', color: 'text-orange-400',  bg: 'bg-orange-500/10 border-orange-500/20' },
+  error:   { icon: '🔍', label: 'No result',  color: 'text-slate-400',   bg: 'bg-white/5 border-white/10' },
 };
 
 export default function RetailerCoverage() {

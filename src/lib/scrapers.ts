@@ -16,8 +16,72 @@ const BASE_HEADERS = {
   'Accept-Language': 'en-AU,en-GB;q=0.9,en;q=0.8',
   Connection: 'keep-alive',
   'Cache-Control': 'no-cache',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Upgrade-Insecure-Requests': '1',
 };
-const JSON_HEADERS = { ...BASE_HEADERS, Accept: 'application/json, text/plain, */*', 'Content-Type': 'application/json' };
+const JSON_HEADERS = {
+  ...BASE_HEADERS,
+  Accept: 'application/json, text/plain, */*',
+  'Content-Type': 'application/json',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-origin',
+};
+
+// ── Google Shopping scraper (universal fallback for AU retailers) ─────────────
+export async function scrapeGoogleShopping(query: string, retailerDomain?: string): Promise<ScraperResult> {
+  try {
+    const site = retailerDomain ? ` site:${retailerDomain}` : '';
+    const searchQuery = `${query} australia price${site}`;
+    const url = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}&tbm=shop&gl=au&hl=en-AU&num=10`;
+    const html = await get(url, {
+      headers: {
+        ...BASE_HEADERS,
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Referer: 'https://www.google.com.au/',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    const $ = cheerio.load(html);
+    const results: ProductResult[] = [];
+
+    // Google Shopping result cards
+    $('div.sh-dgr__content, .sh-pr__product-results-grid > div, [data-docid]').slice(0, 10).each((_, el) => {
+      const name = $(el).find('h3, .tAxDx, [class*="title"], .translate-content').first().text().trim();
+      const priceText = $(el).find('.a8Pemb, [class*="price"], .kHxwFf').first().text().trim();
+      const price = parsePrice(priceText);
+      const store = $(el).find('.aULzUe, .IuHnof, [class*="merchant"], [class*="store"]').first().text().trim();
+      const imgEl = $(el).find('img').first();
+      const imgSrc = imgEl.attr('src') ?? imgEl.attr('data-src') ?? '';
+      const href = $(el).find('a').first().attr('href') ?? '';
+      const productUrl = href.startsWith('http') ? href : href.startsWith('/url?') 
+        ? new URLSearchParams(href.slice(5)).get('q') ?? href 
+        : `https://www.google.com${href}`;
+
+      if (name && price) {
+        results.push({
+          retailer: (store as RetailerName) || 'Amazon AU',
+          productName: name,
+          price,
+          imageUrl: imgSrc.startsWith('data:') ? '' : imgSrc,
+          productUrl,
+          inStock: true,
+          onSale: false,
+          scrapedAt: ts(),
+          storeBranch: store || undefined,
+        });
+      }
+    });
+
+    return results.length
+      ? { retailer: 'Amazon AU', results, status: 'ok' }
+      : { retailer: 'Amazon AU', results: [], status: 'empty', message: 'No Google Shopping results' };
+  } catch (err) {
+    return { retailer: 'Amazon AU', results: [], status: 'error', message: String(err) };
+  }
+}
 
 async function get(url: string, cfg?: AxiosRequestConfig): Promise<string> {
   const r = await axios.get(url, { headers: BASE_HEADERS, timeout: 15000, maxRedirects: 5, ...cfg });
@@ -50,84 +114,89 @@ function absoluteUrl(base: string, value?: string): string {
 
 // ── COLES ─────────────────────────────────────────────────────────────────────
 export async function scrapeColes(query: string): Promise<ScraperResult> {
+  // Try Coles v2 search API first (most reliable)
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const api = await getJson<any>(
+      `https://www.coles.com.au/api/2.0/page/categories/search?q=${encodeURIComponent(query)}&page=1&pageSize=8`,
+      {
+        headers: {
+          ...JSON_HEADERS,
+          Referer: `https://www.coles.com.au/search?q=${encodeURIComponent(query)}`,
+          Origin: 'https://www.coles.com.au',
+          'ocp-apim-subscription-key': '',
+        },
+      });
+    const prods = api?.results ?? api?.products ?? [];
+    if (prods.length) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const results: ProductResult[] = prods.slice(0, 8).map((p: any) => ({
+        retailer: 'Coles' as RetailerName,
+        productName: p.name ?? p.title ?? '',
+        price: p.pricing?.now ?? p.price ?? 0,
+        originalPrice: p.pricing?.was,
+        unit: p.pricing?.unit?.quantity ? `${p.pricing.unit.quantity}${p.pricing.unit.ofMeasureType ?? ''}` : p.size,
+        pricePerUnit: p.pricing?.unit?.price,
+        imageUrl: absoluteUrl('https://www.coles.com.au', p.imageUris?.[0]?.uri ?? p.image ?? ''),
+        productUrl: `https://www.coles.com.au/product/${p.id ?? ''}`,
+        inStock: !(p.restriction?.isUnavailable ?? false),
+        onSale: !!p.pricing?.promotionType,
+        scrapedAt: ts(),
+      })).filter((r: ProductResult) => r.productName && r.price > 0);
+      if (results.length) return { retailer: 'Coles', results, status: 'ok' };
+    }
+  } catch { /* fall through */ }
+
+  // Try Coles __NEXT_DATA__ via HTML
   try {
     const html = await get(`https://www.coles.com.au/search?q=${encodeURIComponent(query)}`,
       { headers: { ...BASE_HEADERS, Referer: 'https://www.coles.com.au/' } });
     const $ = cheerio.load(html);
-
     const nd = $('#__NEXT_DATA__').html();
     if (nd) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = JSON.parse(nd) as any;
-        const prods = data?.props?.pageProps?.searchResults?.results ?? data?.props?.pageProps?.products ?? [];
-        if (prods.length) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const results: ProductResult[] = prods.slice(0, 8).map((p: any) => ({
-            retailer: 'Coles' as RetailerName,
-            productName: p.name ?? p.title ?? '',
-            price: p.pricing?.now ?? p.price ?? 0,
-            originalPrice: p.pricing?.was,
-            unit: p.pricing?.unit?.quantity ? `${p.pricing.unit.quantity}${p.pricing.unit.ofMeasureType ?? ''}` : p.size,
-            pricePerUnit: p.pricing?.unit?.price,
-            imageUrl: absoluteUrl('https://www.coles.com.au', p.imageUris?.[0]?.uri ?? p.image ?? ''),
-            productUrl: `https://www.coles.com.au/product/${p.id ?? ''}`,
-            inStock: !(p.restriction?.isUnavailable ?? false),
-            onSale: !!p.pricing?.promotionType,
-            scrapedAt: ts(),
-          })).filter((r: ProductResult) => r.productName && r.price > 0);
-          if (results.length) return { retailer: 'Coles', results, status: 'ok' };
-        }
-      } catch { /* fall through */ }
-    }
-
-    // Coles JSON API fallback
-    try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const api = await getJson<any>(
-        `https://www.coles.com.au/api/2.0/page/categories/search?q=${encodeURIComponent(query)}&page=1&pageSize=8`,
-        { headers: { ...JSON_HEADERS, Referer: 'https://www.coles.com.au/' } });
-      const prods = api?.results ?? api?.products ?? [];
+      const data = JSON.parse(nd) as any;
+      const prods = data?.props?.pageProps?.searchResults?.results ?? data?.props?.pageProps?.products ?? [];
       if (prods.length) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const results: ProductResult[] = prods.slice(0, 8).map((p: any) => ({
           retailer: 'Coles' as RetailerName,
-          productName: p.name ?? '',
+          productName: p.name ?? p.title ?? '',
           price: p.pricing?.now ?? p.price ?? 0,
           originalPrice: p.pricing?.was,
-          unit: p.size,
-          imageUrl: absoluteUrl('https://www.coles.com.au', p.imageUris?.[0]?.uri ?? ''),
+          unit: p.pricing?.unit?.quantity ? `${p.pricing.unit.quantity}${p.pricing.unit.ofMeasureType ?? ''}` : p.size,
+          pricePerUnit: p.pricing?.unit?.price,
+          imageUrl: absoluteUrl('https://www.coles.com.au', p.imageUris?.[0]?.uri ?? p.image ?? ''),
           productUrl: `https://www.coles.com.au/product/${p.id ?? ''}`,
-          inStock: true,
-          onSale: !!(p.pricing?.was && p.pricing.was > (p.pricing.now ?? 0)),
+          inStock: !(p.restriction?.isUnavailable ?? false),
+          onSale: !!p.pricing?.promotionType,
           scrapedAt: ts(),
         })).filter((r: ProductResult) => r.productName && r.price > 0);
         if (results.length) return { retailer: 'Coles', results, status: 'ok' };
       }
-    } catch { /* fall through */ }
 
-    // HTML fallback
-    const results: ProductResult[] = [];
-    for (const sel of ['[data-testid="product-tile"]', '.product-tile', '[class*="ProductTile"]', 'article[class*="product"]']) {
-      $(sel).slice(0, 8).each((_, el) => {
-        const name = $(el).find('[data-testid="product-name"],h2,h3,[class*="name"]').first().text().trim();
-        const price = parsePrice($(el).find('[class*="price"],[data-testid*="price"]').first().text());
-        if (name && price) {
-          results.push({
-            retailer: 'Coles', productName: name, price,
-            productUrl: absoluteUrl('https://www.coles.com.au', $(el).find('a').attr('href') ?? ''),
-            imageUrl: absoluteUrl('https://www.coles.com.au', $(el).find('img').attr('src') ?? ''),
-            inStock: true,
-            onSale: $(el).find('[class*="special"],[class*="sale"]').length > 0,
-            scrapedAt: ts(),
-          });
-        }
-      });
-      if (results.length) break;
+      // HTML CSS selectors fallback
+      const results: ProductResult[] = [];
+      for (const sel of ['[data-testid="product-tile"]', '.product-tile', '[class*="ProductTile"]', 'article[class*="product"]']) {
+        $(sel).slice(0, 8).each((_, el) => {
+          const name = $(el).find('[data-testid="product-name"],h2,h3,[class*="name"]').first().text().trim();
+          const price = parsePrice($(el).find('[class*="price"],[data-testid*="price"]').first().text());
+          if (name && price) {
+            results.push({
+              retailer: 'Coles', productName: name, price,
+              productUrl: absoluteUrl('https://www.coles.com.au', $(el).find('a').attr('href') ?? ''),
+              imageUrl: absoluteUrl('https://www.coles.com.au', $(el).find('img').attr('src') ?? ''),
+              inStock: true,
+              onSale: $(el).find('[class*="special"],[class*="sale"]').length > 0,
+              scrapedAt: ts(),
+            });
+          }
+        });
+        if (results.length) break;
+      }
+      if (results.length) return { retailer: 'Coles', results, status: 'ok' };
     }
-    return results.length
-      ? { retailer: 'Coles', results, status: 'ok' }
-      : { retailer: 'Coles', results: [], status: 'empty', message: 'No Coles results' };
+    return { retailer: 'Coles', results: [], status: 'empty', message: 'No Coles results' };
   } catch (err) {
     return { retailer: 'Coles', results: [], status: 'error', message: String(err) };
   }
@@ -137,10 +206,18 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
 export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
   try {
     type WP = { Name: string; Price: number; WasPrice?: number; PackageSize?: string; CupPrice?: number; MediumImageFile?: string; Stockcode?: number; IsInStock?: boolean; IsOnSpecial?: boolean };
-    type WR = { Products?: Array<{ Products?: WP[] }> };
+    type WR = { Products?: Array<{ Products?: WP[] }>; SearchResultsCount?: number };
     const data = await getJson<WR>(
-      `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(query)}&pageNumber=1&pageSize=8&sortType=TraderRelevance`,
-      { headers: { ...JSON_HEADERS, Referer: 'https://www.woolworths.com.au/', 'x-requested-with': 'XMLHttpRequest' } });
+      `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(query)}&pageNumber=1&pageSize=8&sortType=TraderRelevance&isMobile=false`,
+      {
+        headers: {
+          ...JSON_HEADERS,
+          Referer: 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + encodeURIComponent(query),
+          Origin: 'https://www.woolworths.com.au',
+          'x-requested-with': 'XMLHttpRequest',
+          Cookie: 'wow-auth-token=; _abck=; ak_bmsc=',
+        },
+      });
     const products = data?.Products?.[0]?.Products ?? [];
     if (!products.length) return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths results' };
     const results: ProductResult[] = products.slice(0, 8).map((p) => ({
@@ -150,7 +227,9 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
       originalPrice: p.WasPrice && p.WasPrice !== p.Price ? p.WasPrice : undefined,
       unit: p.PackageSize,
       pricePerUnit: p.CupPrice ? parseFloat(p.CupPrice.toFixed(2)) : undefined,
-      imageUrl: p.MediumImageFile ?? '',
+      imageUrl: p.MediumImageFile
+        ? (p.MediumImageFile.startsWith('http') ? p.MediumImageFile : `https://cdn0.woolworths.media/content/wowproductimages/medium/${p.MediumImageFile}`)
+        : '',
       productUrl: `https://www.woolworths.com.au/shop/productdetails/${p.Stockcode ?? ''}`,
       inStock: p.IsInStock ?? true,
       onSale: !!p.IsOnSpecial,
@@ -160,6 +239,30 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
       ? { retailer: 'Woolworths', results, status: 'ok' }
       : { retailer: 'Woolworths', results: [], status: 'empty' };
   } catch (err) {
+    // Woolworths blocks server IPs — try their public catalogue API
+    try {
+      type CatalogItem = { name?: string; price?: number; wasPrice?: number; size?: string; imageUrl?: string; urlFriendlyName?: string; stockcode?: number };
+      const fallback = await getJson<{ totalRecordCount?: number; products?: CatalogItem[] }>(
+        `https://www.woolworths.com.au/apis/ui/browse/category?categoryId=1_A8K4E&pageNumber=1&pageSize=8&sortType=TraderRelevance&filters=&keyword=${encodeURIComponent(query)}`,
+        { headers: { ...JSON_HEADERS, Referer: 'https://www.woolworths.com.au/' } }
+      );
+      const prods = fallback?.products ?? [];
+      if (prods.length) {
+        const results: ProductResult[] = prods.map((p) => ({
+          retailer: 'Woolworths' as RetailerName,
+          productName: p.name ?? '',
+          price: p.price ?? 0,
+          originalPrice: p.wasPrice && p.wasPrice !== p.price ? p.wasPrice : undefined,
+          unit: p.size,
+          imageUrl: p.imageUrl ?? '',
+          productUrl: `https://www.woolworths.com.au/shop/productdetails/${p.stockcode ?? ''}`,
+          inStock: true,
+          onSale: !!(p.wasPrice && p.wasPrice > (p.price ?? 0)),
+          scrapedAt: ts(),
+        })).filter((r) => r.productName && r.price > 0);
+        if (results.length) return { retailer: 'Woolworths', results, status: 'ok' };
+      }
+    } catch { /* fall through */ }
     return { retailer: 'Woolworths', results: [], status: 'error', message: String(err) };
   }
 }
@@ -599,21 +702,53 @@ export async function scrapeRetailer(retailer: RetailerName, query: string): Pro
   return (await scrapeRetailerWithStatus(retailer, query)).results;
 }
 
+// Retailer → their website domain for Google Shopping fallback
+const RETAILER_DOMAIN: Partial<Record<RetailerName, string>> = {
+  Coles: 'coles.com.au',
+  Woolworths: 'woolworths.com.au',
+  Aldi: 'aldi.com.au',
+  IGA: 'igashop.com.au',
+  'Harris Farm': 'harrisfarm.com.au',
+  Costco: 'costco.com.au',
+  'Amazon AU': 'amazon.com.au',
+  Target: 'target.com.au',
+  'Big W': 'bigw.com.au',
+};
+
+// Grocery retailers where we try Google Shopping as a fallback if blocked
+const GROCERY_RETAILERS = new Set<RetailerName>(['Coles', 'Woolworths', 'Aldi', 'IGA', 'Harris Farm', 'Costco']);
+
 export async function scrapeRetailerWithStatus(retailer: RetailerName, query: string): Promise<ScraperResult> {
+  let result: ScraperResult;
   switch (retailer) {
-    case 'Coles':       return scrapeColes(query);
-    case 'Woolworths':  return scrapeWoolworths(query);
-    case 'Aldi':        return scrapeAldi(query);
-    case 'IGA':         return scrapeIGA(query);
-    case 'Costco':      return scrapeCostco(query);
-    case 'Harris Farm': return scrapeHarrisFarm(query);
-    case 'Amazon AU':   return scrapeAmazon(query);
-    case 'Target':      return scrapeTarget(query);
-    case 'Officeworks': return scrapeOfficeworks(query);
-    case 'Big W':       return scrapeBigW(query);
-    case 'Kmart':       return blockedRetailer('Kmart', 'Kmart blocks direct scraper access from this environment.');
-    case 'Chemist Warehouse': return blockedRetailer('Chemist Warehouse', 'Chemist Warehouse is redirected behind an enterprise login path in this environment.');
-    case 'Priceline':   return blockedRetailer('Priceline', 'Priceline is protected by Incapsula in this environment.');
+    case 'Coles':       result = await scrapeColes(query); break;
+    case 'Woolworths':  result = await scrapeWoolworths(query); break;
+    case 'Aldi':        result = await scrapeAldi(query); break;
+    case 'IGA':         result = await scrapeIGA(query); break;
+    case 'Costco':      result = await scrapeCostco(query); break;
+    case 'Harris Farm': result = await scrapeHarrisFarm(query); break;
+    case 'Amazon AU':   result = await scrapeAmazon(query); break;
+    case 'Target':      result = await scrapeTarget(query); break;
+    case 'Officeworks': result = await scrapeOfficeworks(query); break;
+    case 'Big W':       result = await scrapeBigW(query); break;
+    case 'Kmart':       return blockedRetailer('Kmart', 'Kmart blocks automated access.');
+    case 'Chemist Warehouse': return blockedRetailer('Chemist Warehouse', 'Chemist Warehouse blocks automated access.');
+    case 'Priceline':   return blockedRetailer('Priceline', 'Priceline blocks automated access.');
     default:            return { retailer, results: [], status: 'error', message: 'Unknown retailer' };
   }
+
+  // If blocked/errored for a grocery retailer, try Google Shopping as fallback
+  if ((result.status === 'error' || result.status === 'empty') && GROCERY_RETAILERS.has(retailer)) {
+    try {
+      const domain = RETAILER_DOMAIN[retailer];
+      const gSearch = await scrapeGoogleShopping(query, domain);
+      if (gSearch.results.length > 0) {
+        // Tag results with correct retailer
+        const taggedResults = gSearch.results.map((r) => ({ ...r, retailer, storeBranch: 'via Google Shopping' }));
+        return { retailer, results: taggedResults, status: 'ok', message: 'Results via Google Shopping' };
+      }
+    } catch { /* ignore */ }
+  }
+
+  return result;
 }
