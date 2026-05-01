@@ -112,6 +112,39 @@ function absoluteUrl(base: string, value?: string): string {
   return `${base}${value.startsWith('/') ? '' : '/'}${value}`;
 }
 
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9.\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const GENERIC_BRANDLESS_TOKENS = new Set([
+  'milk', 'almond', 'bread', 'loaf', 'eggs', 'egg', 'free', 'range', 'cheese', 'greek', 'yoghurt', 'yogurt',
+  'coffee', 'instant', 'olive', 'oil', 'dal', 'dhal', 'toor', 'tur', 'tuvar', 'arhar', 'pigeon', 'peas',
+  'rice', 'lentils', 'flour', 'chicken', 'breast', 'full', 'cream', 'skim', 'natural', 'vanilla', 'unsweetened',
+  'barista', 'extra', 'virgin', '1l', '2l', '500g', '750ml', '1kg', '250ml',
+]);
+
+function getDistinctiveQueryTokens(query: string): string[] {
+  return normalizeSearchText(query)
+    .split(' ')
+    .filter(Boolean)
+    .filter((token) => token.length >= 4 && !GENERIC_BRANDLESS_TOKENS.has(token));
+}
+
+function resultsContainDistinctiveTokens(query: string, results: ProductResult[]): boolean {
+  const distinctiveTokens = getDistinctiveQueryTokens(query);
+  if (distinctiveTokens.length === 0) return results.length > 0;
+
+  return results.some((result) => {
+    const text = normalizeSearchText(`${result.productName} ${result.unit ?? ''}`);
+    return distinctiveTokens.every((token) => text.includes(token));
+  });
+}
+
 // ── COLES ─────────────────────────────────────────────────────────────────────
 export async function scrapeColes(query: string): Promise<ScraperResult> {
   // Try Coles v2 search API first (most reliable)
@@ -737,16 +770,28 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
     default:            return { retailer, results: [], status: 'error', message: 'Unknown retailer' };
   }
 
-  // Only use Google Shopping when the retailer request failed outright.
-  // If a retailer returned "empty", keep that signal instead of inventing weak substitutes.
-  if (result.status === 'error' && GROCERY_RETAILERS.has(retailer)) {
+  const shouldTryBrandedIndexedFallback =
+    GROCERY_RETAILERS.has(retailer)
+    && result.status === 'empty'
+    && getDistinctiveQueryTokens(query).length > 0;
+
+  // Only use Google Shopping when the retailer request failed outright,
+  // or when a branded supermarket query came back empty and we need a safer indexed fallback.
+  if ((result.status === 'error' || shouldTryBrandedIndexedFallback) && GROCERY_RETAILERS.has(retailer)) {
     try {
       const domain = RETAILER_DOMAIN[retailer];
       const gSearch = await scrapeGoogleShopping(query, domain);
-      if (gSearch.results.length > 0) {
+      const taggedResults = gSearch.results.map((r) => ({ ...r, retailer, storeBranch: 'via Google Shopping' }));
+      if (resultsContainDistinctiveTokens(query, taggedResults)) {
         // Tag results with correct retailer
-        const taggedResults = gSearch.results.map((r) => ({ ...r, retailer, storeBranch: 'via Google Shopping' }));
-        return { retailer, results: taggedResults, status: 'ok', message: 'Results via Google Shopping' };
+        return {
+          retailer,
+          results: taggedResults,
+          status: 'ok',
+          message: result.status === 'error'
+            ? 'Results via Google Shopping fallback'
+            : 'Results via indexed retailer fallback',
+        };
       }
     } catch { /* ignore */ }
   }
