@@ -15,24 +15,26 @@ import path from 'path';
 import fs from 'fs';
 import { RetailerName } from '@/types';
 
-// ── Path ─────────────────────────────────────────────────────────────────────
-const DATA_DIR =
-  process.env.DATA_DIR
-    ?? process.env.RENDER_DISK_MOUNT_PATH
-    ?? (process.env.NODE_ENV === 'production'
-      ? '/tmp'
-      : path.join(process.cwd(), 'data'));
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = path.join(DATA_DIR, 'prices.db');
-
 // ── Singleton ─────────────────────────────────────────────────────────────────
 let _db: Database.Database | null = null;
 
+function getDataDir(): string {
+  return (
+    process.env.DATA_DIR ??
+    process.env.RENDER_DISK_MOUNT_PATH ??
+    (process.env.NODE_ENV === 'production'
+      ? '/tmp'
+      : path.join(process.cwd(), 'data'))
+  );
+}
+
 export function getDb(): Database.Database {
   if (_db) return _db;
-  _db = new Database(DB_PATH);
+  // Resolve path lazily at runtime — never at module evaluation time
+  const dataDir = getDataDir();
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  const dbPath = path.join(dataDir, 'prices.db');
+  _db = new Database(dbPath);
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
   migrate(_db);
