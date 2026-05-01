@@ -60,6 +60,10 @@ export interface SearchResponse {
   retailerStatuses?: RetailerSearchStatus[];
   clarificationNeeded?: boolean;
   clarificationOptions?: string[];
+  meta?: {
+    durationMs?: number;
+    buildVersion?: string;
+  };
 }
 
 export interface TrendsResponse {

@@ -45,6 +45,10 @@ function needsClarification(query: string): string[] | null {
 }
 
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
+  const buildVersion = process.env.RENDER_GIT_COMMIT?.slice(0, 7)
+    ?? process.env.NEXT_PUBLIC_APP_BUILD
+    ?? 'local';
   try {
     const { query, skipClarification } = await req.json();
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
@@ -55,11 +59,16 @@ export async function POST(req: NextRequest) {
     if (!skipClarification) {
       const opts = needsClarification(query.trim());
       if (opts) {
-        return NextResponse.json({
+        const durationMs = Date.now() - startedAt;
+        const response = NextResponse.json({
           clarificationNeeded: true,
           clarificationOptions: opts,
           query: query.trim(),
+          meta: { durationMs, buildVersion },
         });
+        response.headers.set('x-superm-build', buildVersion);
+        response.headers.set('x-superm-duration-ms', String(durationMs));
+        return response;
       }
     }
 
@@ -113,11 +122,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ...response, results: safeResults, trendData });
+    const durationMs = Date.now() - startedAt;
+    const apiResponse = NextResponse.json({
+      ...response,
+      results: safeResults,
+      trendData,
+      meta: { durationMs, buildVersion },
+    });
+    apiResponse.headers.set('x-superm-build', buildVersion);
+    apiResponse.headers.set('x-superm-duration-ms', String(durationMs));
+    return apiResponse;
   } catch (err: unknown) {
     console.error('Search error:', err instanceof Error ? err.stack : err);
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: `Search failed: ${message}` }, { status: 500 });
+    const durationMs = Date.now() - startedAt;
+    const errorResponse = NextResponse.json({
+      error: `Search failed: ${message}`,
+      meta: { durationMs, buildVersion },
+    }, { status: 500 });
+    errorResponse.headers.set('x-superm-build', buildVersion);
+    errorResponse.headers.set('x-superm-duration-ms', String(durationMs));
+    return errorResponse;
   }
 }
 
