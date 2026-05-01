@@ -1,0 +1,52 @@
+{
+  "name": "super-m-ai",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "cap:sync": "cap sync",
+    "cap:android": "cap open android",
+    "cap:ios": "cap open ios"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/multer": "^2.1.0",
+    "@types/uuid": "^10.0.0",
+    "axios": "^1.15.2",
+    "better-sqlite3": "^12.9.0",
+    "cheerio": "^1.2.0",
+    "groq-sdk": "^1.1.2",
+    "multer": "^2.1.1",
+    "next": "^16.2.4",
+    "openai": "^6.35.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "recharts": "^3.8.1",
+    "sharp": "^0.34.5",
+    "uuid": "^14.0.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.4",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.4",
+    "postcss": "^8.5.13",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^6.0.3"
+  }
+}

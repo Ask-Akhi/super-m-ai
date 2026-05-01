@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: grocerywithai
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm run start -- --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    disks:
+      - name: grocerywithai-data
+        mountPath: /var/data
+        sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://grocerywithai.com
+      - key: CAP_SERVER_URL
+        value: https://grocerywithai.com
+      - key: DATA_DIR
+        value: /var/data/super-m-ai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
