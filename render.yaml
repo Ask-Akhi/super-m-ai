@@ -14,8 +14,6 @@ services:
         value: https://grocerywithai.com
       - key: CAP_SERVER_URL
         value: https://grocerywithai.com
-      - key: DATA_DIR
-        value: /tmp
       - key: OPENAI_API_KEY
         sync: false
       - key: GROQ_API_KEY

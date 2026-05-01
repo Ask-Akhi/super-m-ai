@@ -9,7 +9,8 @@ export default function SearchBar() {
   const { isLoading, setLoading, setResults, setError, setTrendData, setQuery, reset, setClarification, clarificationOptions } =
     useSearchStore();
   const inputRef = useRef<HTMLInputElement>(null);
-  const resolvedInputValue = (inputRef.current?.value || inputValue || '').trim();
+  // Do NOT trim here — trimming kills trailing spaces while the user is still typing
+  const resolvedInputValue = inputRef.current?.value ?? inputValue ?? '';
 
   useEffect(() => {
     setLoading(false);

@@ -19,13 +19,10 @@ import { RetailerName } from '@/types';
 let _db: Database.Database | null = null;
 
 function getDataDir(): string {
-  return (
-    process.env.DATA_DIR ??
-    process.env.RENDER_DISK_MOUNT_PATH ??
-    (process.env.NODE_ENV === 'production'
-      ? '/tmp'
-      : path.join(process.cwd(), 'data'))
-  );
+  // In production, always use /tmp (writable on all serverless/Render envs).
+  // Never trust DATA_DIR/RENDER_DISK_MOUNT_PATH — the disk may not be mounted.
+  if (process.env.NODE_ENV === 'production') return '/tmp';
+  return path.join(process.cwd(), 'data');
 }
 
 export function getDb(): Database.Database {
