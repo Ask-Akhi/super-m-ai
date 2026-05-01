@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchStore } from '@/lib/store';
 import { SearchResponse } from '@/types';
 import { RETAILERS } from '@/lib/retailers';
@@ -8,29 +8,13 @@ export default function SearchBar() {
   const [inputValue, setInputValue] = useState('');
   const { isLoading, setLoading, setResults, setError, setTrendData, setQuery, reset, setClarification, clarificationOptions } =
     useSearchStore();
-  const inputRef = useRef<HTMLInputElement>(null);
-  // Do NOT trim here — trimming kills trailing spaces while the user is still typing
-  const resolvedInputValue = inputRef.current?.value ?? inputValue ?? '';
 
   useEffect(() => {
     setLoading(false);
   }, [setLoading]);
 
-  useEffect(() => {
-    const syncAutofilledValue = () => {
-      const domValue = inputRef.current?.value?.trim() ?? '';
-      if (domValue && domValue !== inputValue) {
-        setInputValue(domValue);
-      }
-    };
-
-    const frame = window.requestAnimationFrame(syncAutofilledValue);
-    window.setTimeout(syncAutofilledValue, 250);
-    return () => window.cancelAnimationFrame(frame);
-  }, [inputValue]);
-
   const handleSearch = async (q?: string, skipClarification = false) => {
-    const query = (q ?? resolvedInputValue).trim();
+    const query = (q ?? inputValue).trim();
     if (!query || isLoading) return;
     reset();
     setQuery(query);
@@ -87,7 +71,6 @@ export default function SearchBar() {
             </svg>
           </div>
           <input
-            ref={inputRef}
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
