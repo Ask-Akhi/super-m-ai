@@ -146,7 +146,7 @@ function buildInsights(query: string, ranked: ProductResult[], cheapest: Product
     insights.push(`Matched ${foundRetailers.length} of ${ALL_RETAILERS.length} retailers for "${query}" after retrying alternate product phrases.`);
   }
   if (missingRetailers.length > 0) {
-    insights.push(`Still no strong product match from ${missingRetailers.join(', ')}. Those stores may not stock the item online or may block search results.`);
+    insights.push(`Live retailer lookup did not return a usable match from ${missingRetailers.join(', ')}. Those stores may be blocking automated search, timing out, or returning weak product data right now.`);
   }
 
   return insights;
@@ -154,7 +154,7 @@ function buildInsights(query: string, ranked: ProductResult[], cheapest: Product
 
 function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductResult | null, statuses: RetailerSearchStatus[]): string {
   if (ranked.length === 0) {
-    return `I could not find a reliable match for "${query}" across the live retailer searches. Try adding the size, brand, or pack format for a stronger match.`;
+    return `I could not find a reliable live match for "${query}" across the retailer searches. Try adding the size, brand, or pack format, and keep in mind some stores may limit automated search coverage.`;
   }
 
   const bestMatch = ranked[0];
