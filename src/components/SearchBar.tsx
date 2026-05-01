@@ -26,6 +26,18 @@ export default function SearchBar() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, skipClarification }),
       });
+      const contentType = res.headers.get('content-type') ?? '';
+      if (!contentType.toLowerCase().includes('application/json')) {
+        const responseText = await res.text();
+        const isHtmlResponse = /<!doctype html/i.test(responseText) || /<html/i.test(responseText);
+        if (isHtmlResponse) {
+          throw new Error(
+            'The search service returned an HTML page instead of data. Please hard refresh the site and redeploy Render with "Clear build cache & deploy".',
+          );
+        }
+        throw new Error('The search service returned an unexpected response. Please try again in a moment.');
+      }
+
       const data: SearchResponse & { trendData?: [] } = await res.json();
       if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Search failed');
       if (data.clarificationNeeded && data.clarificationOptions) {
