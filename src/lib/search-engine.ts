@@ -15,7 +15,9 @@ import {
 } from './search-intelligence';
 
 const INITIAL_RETAILER_TIMEOUT_MS = 5000;
+const CORE_SUPERMARKET_TIMEOUT_MS = 6500;
 const RETRY_RETAILER_TIMEOUT_MS = 2000;
+const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 3000;
 const MAX_RETRY_VARIANTS = 2;
 const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Coles',
@@ -26,6 +28,7 @@ const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Harris Farm',
   'Big W',
 ]);
+const CORE_SUPERMARKET_RETAILERS = new Set<RetailerName>(['Coles', 'Woolworths', 'Aldi', 'IGA']);
 
 const ALL_RETAILERS: RetailerName[] = [
   'Coles',
@@ -76,6 +79,10 @@ async function timeboxedRetailerSearch(
     scrapeRetailerWithStatus(retailer, query),
     timeout,
   ]);
+}
+
+function getInitialTimeoutForRetailer(retailer: RetailerName): number {
+  return CORE_SUPERMARKET_RETAILERS.has(retailer) ? CORE_SUPERMARKET_TIMEOUT_MS : INITIAL_RETAILER_TIMEOUT_MS;
 }
 
 function getCachedRetailerFallback(retailer: RetailerName, variants: string[], query: string): ScraperResult | null {
@@ -188,13 +195,32 @@ function chooseCheapestValidMatch(ranked: ProductResult[], query: string): Produ
 
 function hasDistinctiveBrandSignal(query: string): boolean {
   const tokens = tokenize(query);
-  const genericTokens = new Set([
-    'milk', 'almond', 'bread', 'loaf', 'eggs', 'egg', 'free', 'range', 'cheese', 'greek', 'yoghurt', 'yogurt',
-    'coffee', 'instant', 'olive', 'oil', 'dal', 'dhal', 'toor', 'tur', 'tuvar', 'arhar', 'pigeon', 'peas',
-    'rice', 'lentils', 'flour', 'chicken', 'breast', 'full', 'cream', 'skim', 'natural', 'vanilla', 'unsweetened',
-    'barista', 'extra', 'virgin', '1l', '2l', '500g', '750ml', '1kg', '250ml',
-  ]);
-  return tokens.some((token) => token.length >= 5 && !genericTokens.has(token));
+  return tokens.some((token) => token.length >= 5 && !GENERIC_QUERY_TOKENS.has(token));
+}
+
+const GENERIC_QUERY_TOKENS = new Set([
+  'milk', 'almond', 'bread', 'loaf', 'eggs', 'egg', 'free', 'range', 'cheese', 'greek', 'yoghurt', 'yogurt',
+  'coffee', 'instant', 'olive', 'oil', 'dal', 'dhal', 'toor', 'tur', 'tuvar', 'arhar', 'pigeon', 'peas',
+  'rice', 'lentils', 'flour', 'chicken', 'breast', 'full', 'cream', 'skim', 'natural', 'vanilla', 'unsweetened',
+  'barista', 'extra', 'virgin', '1l', '2l', '500g', '750ml', '1kg', '250ml',
+]);
+
+function getDistinctiveTokens(query: string): string[] {
+  return tokenize(query).filter((token) => token.length >= 4 && !GENERIC_QUERY_TOKENS.has(token));
+}
+
+function getRetryVariantsForRetailer(retailer: RetailerName, query: string, retryVariants: string[]): string[] {
+  if (!CORE_SUPERMARKET_RETAILERS.has(retailer)) return retryVariants;
+
+  const distinctiveTokens = getDistinctiveTokens(query);
+  if (distinctiveTokens.length === 0) return retryVariants;
+
+  const filtered = retryVariants.filter((variant) => {
+    const normalizedVariant = normalizeText(variant);
+    return distinctiveTokens.every((token) => normalizedVariant.includes(token));
+  });
+
+  return filtered.length > 0 ? filtered : [query];
 }
 
 function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult[] {
@@ -229,11 +255,12 @@ function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult
 
 export async function runSmartSearch(query: string): Promise<SearchResponse> {
   const initialResults = await Promise.all(
-    ALL_RETAILERS.map((retailer) => timeboxedRetailerSearch(retailer, query, INITIAL_RETAILER_TIMEOUT_MS)),
+    ALL_RETAILERS.map((retailer) => timeboxedRetailerSearch(retailer, query, getInitialTimeoutForRetailer(retailer))),
   );
 
   const successfulResults = initialResults.flatMap((result) => rankRetailerResults(result.results, query).slice(0, 2));
-  const shouldRetryMissingRetailers = successfulResults.length === 0 && !hasDistinctiveBrandSignal(query);
+  const hasBrandSignal = hasDistinctiveBrandSignal(query);
+  const shouldRetryMissingRetailers = successfulResults.length === 0 && !hasBrandSignal;
   const retryVariants = unique([
     ...generateQueryVariants(query),
     ...buildDerivedQueries(query, successfulResults),
@@ -241,17 +268,23 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
   ]).slice(0, MAX_RETRY_VARIANTS);
 
   const finalResults = await Promise.all(initialResults.map(async (initial) => {
+    const shouldRetryThisRetailer =
+      shouldRetryMissingRetailers
+      || (hasBrandSignal && CORE_SUPERMARKET_RETAILERS.has(initial.retailer));
+
     if (
       rankRetailerResults(initial.results, query).length > 0
       || retryVariants.length <= 1
       || !RETRYABLE_RETAILERS.has(initial.retailer)
-      || !shouldRetryMissingRetailers
+      || !shouldRetryThisRetailer
     ) return initial;
 
+    const retailerRetryVariants = getRetryVariantsForRetailer(initial.retailer, query, retryVariants);
     const attempts: ScraperResult[] = [initial];
-    for (const variant of retryVariants) {
+    for (const variant of retailerRetryVariants) {
       if (normalizeText(variant) === normalizeText(query)) continue;
-      const retry = await timeboxedRetailerSearch(initial.retailer, variant, RETRY_RETAILER_TIMEOUT_MS);
+      const retryTimeout = CORE_SUPERMARKET_RETAILERS.has(initial.retailer) ? CORE_SUPERMARKET_RETRY_TIMEOUT_MS : RETRY_RETAILER_TIMEOUT_MS;
+      const retry = await timeboxedRetailerSearch(initial.retailer, variant, retryTimeout);
       attempts.push(retry);
       if (rankRetailerResults(retry.results, query).length > 0) break;
     }
@@ -259,7 +292,7 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
     const bestAttempt = pickBestAttempt(attempts, query);
     if (rankRetailerResults(bestAttempt.results, query).length > 0) return bestAttempt;
 
-    const cacheFallback = getCachedRetailerFallback(initial.retailer, retryVariants, query);
+    const cacheFallback = getCachedRetailerFallback(initial.retailer, retailerRetryVariants, query);
     return cacheFallback ?? bestAttempt;
   }));
 
