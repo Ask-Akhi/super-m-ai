@@ -144,7 +144,13 @@ function isSpecificStapleQuery(query: string): boolean {
     || normalized.includes('cage free')
     || normalized.includes('greek')
     || normalized.includes('extra virgin')
-    || normalized.includes('barista');
+    || normalized.includes('barista')
+    || normalized.includes('cheddar')
+    || normalized.includes('tasty cheese')
+    || normalized.includes('basmati')
+    || normalized.includes('jasmine')
+    || normalized.includes('instant coffee')
+    || normalized.includes('ground coffee');
 
   return tokens.length >= 3 && (hasCountOrSize || hasStructuredFoodPhrase);
 }

@@ -22,6 +22,9 @@ const GROCERY_SYNONYM_GROUPS = [
   ['coriander', 'cilantro'],
   ['free range', 'free-range'],
   ['cage free', 'cage-free'],
+  ['tasty cheese', 'cheddar cheese'],
+  ['ground coffee', 'coffee grounds'],
+  ['basmati rice', 'basmati'],
 ];
 
 const TOKEN_EQUIVALENTS: Record<string, string[]> = {
@@ -55,6 +58,27 @@ const CATEGORY_PROFILES = [
     positive: ['egg', 'eggs', 'free', 'range', 'cage', 'dozen', 'large', 'extra', 'fresh'],
     negative: ['incubator', 'incubators', 'candler', 'turning', 'tray', 'trays', 'poacher', 'poachers'],
     discouraging: ['chocolate', 'easter', 'toy'],
+  },
+  {
+    id: 'cheese',
+    anchors: ['cheese', 'cheddar', 'mozzarella', 'parmesan', 'tasty'],
+    positive: ['cheese', 'cheddar', 'mozzarella', 'parmesan', 'tasty', 'block', 'shredded', 'slices', 'grated'],
+    negative: ['board', 'knife', 'grater', 'slicer', 'snack', 'cracker', 'biscuit'],
+    discouraging: ['dip', 'sauce'],
+  },
+  {
+    id: 'rice',
+    anchors: ['rice', 'basmati', 'jasmine', 'brown'],
+    positive: ['rice', 'basmati', 'jasmine', 'brown', 'grain', 'long', 'white', 'microwave'],
+    negative: ['paper', 'cakes', 'cracker', 'bran', 'noodle'],
+    discouraging: ['pudding'],
+  },
+  {
+    id: 'coffee',
+    anchors: ['coffee', 'espresso', 'cappuccino', 'latte'],
+    positive: ['coffee', 'espresso', 'instant', 'ground', 'beans', 'barista', 'cappuccino', 'latte'],
+    negative: ['cup', 'cups', 'machine', 'maker', 'pods', 'capsules', 'mug', 'travel'],
+    discouraging: ['biscuit', 'syrup'],
   },
   {
     id: 'yoghurt',
@@ -286,6 +310,22 @@ export function generateQueryVariants(query: string): string[] {
     variants.push(normalized.replace(/\bfree range eggs\b/g, '12 free range eggs'));
     variants.push(normalized.replace(/\bcage free\b/g, 'free range'));
   }
+  if (intent.categoryId === 'cheese') {
+    variants.push('cheddar cheese');
+    variants.push('tasty cheese');
+    variants.push(normalized.replace(/\btasty\b/g, 'cheddar'));
+    variants.push(normalized.replace(/\bcheddar\b/g, 'tasty'));
+  }
+  if (intent.categoryId === 'rice') {
+    variants.push('rice');
+    variants.push(normalized.replace(/\bbasmati rice\b/g, 'basmati'));
+    variants.push(normalized.replace(/\bjasmine rice\b/g, 'jasmine'));
+  }
+  if (intent.categoryId === 'coffee') {
+    variants.push('instant coffee');
+    variants.push('ground coffee');
+    variants.push(normalized.replace(/\bcoffee grounds\b/g, 'ground coffee'));
+  }
   if (intent.categoryId === 'oil') {
     variants.push('olive oil');
     variants.push('extra virgin olive oil');
@@ -410,7 +450,7 @@ export function scoreProduct(result: ProductResult, query: string): number {
     else if (MARKETPLACE_RETAILERS.has(result.retailer)) score -= 14;
   }
 
-  if (intent.categoryId === 'yoghurt' || intent.categoryId === 'milk' || intent.categoryId === 'bread' || intent.categoryId === 'dal' || intent.categoryId === 'oil' || intent.categoryId === 'eggs') {
+  if (intent.categoryId === 'yoghurt' || intent.categoryId === 'milk' || intent.categoryId === 'bread' || intent.categoryId === 'dal' || intent.categoryId === 'oil' || intent.categoryId === 'eggs' || intent.categoryId === 'cheese' || intent.categoryId === 'rice' || intent.categoryId === 'coffee') {
     if (GROCERY_FIRST_RETAILERS.has(result.retailer)) score += 12;
     if (GENERAL_RETAILERS.has(result.retailer)) score -= 10;
     if (MARKETPLACE_RETAILERS.has(result.retailer)) score -= 8;
@@ -473,6 +513,21 @@ export function rankRetailerResults(results: ProductResult[], query: string): Pr
         const hasEggAccessory = ['incubator', 'incubators', 'candler', 'turning', 'tray', 'trays', 'poacher', 'poachers']
           .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
         if (hasEggAccessory) return false;
+      }
+      if (profile.intent.categoryId === 'cheese') {
+        const hasCheeseAccessory = ['board', 'knife', 'grater', 'slicer']
+          .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
+        if (hasCheeseAccessory) return false;
+      }
+      if (profile.intent.categoryId === 'rice') {
+        const hasRiceJunk = ['paper', 'cakes', 'cracker', 'bran', 'noodle']
+          .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
+        if (hasRiceJunk) return false;
+      }
+      if (profile.intent.categoryId === 'coffee') {
+        const hasCoffeeAccessory = ['cup', 'cups', 'machine', 'maker', 'mug', 'travel']
+          .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
+        if (hasCoffeeAccessory) return false;
       }
       if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) return false;
       if (profile.intent.anchorTokens.length > 0 && profile.matchedTokens.length === 0) return false;
