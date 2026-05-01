@@ -14,9 +14,9 @@ import {
   unique,
 } from './search-intelligence';
 
-const INITIAL_RETAILER_TIMEOUT_MS = 8000;
-const RETRY_RETAILER_TIMEOUT_MS = 4500;
-const MAX_RETRY_VARIANTS = 3;
+const INITIAL_RETAILER_TIMEOUT_MS = 5000;
+const RETRY_RETAILER_TIMEOUT_MS = 2000;
+const MAX_RETRY_VARIANTS = 2;
 const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Coles',
   'Woolworths',
@@ -186,6 +186,17 @@ function chooseCheapestValidMatch(ranked: ProductResult[], query: string): Produ
   return [...comparable].sort((a, b) => a.price - b.price)[0] ?? ranked[0];
 }
 
+function hasDistinctiveBrandSignal(query: string): boolean {
+  const tokens = tokenize(query);
+  const genericTokens = new Set([
+    'milk', 'almond', 'bread', 'loaf', 'eggs', 'egg', 'free', 'range', 'cheese', 'greek', 'yoghurt', 'yogurt',
+    'coffee', 'instant', 'olive', 'oil', 'dal', 'dhal', 'toor', 'tur', 'tuvar', 'arhar', 'pigeon', 'peas',
+    'rice', 'lentils', 'flour', 'chicken', 'breast', 'full', 'cream', 'skim', 'natural', 'vanilla', 'unsweetened',
+    'barista', 'extra', 'virgin', '1l', '2l', '500g', '750ml', '1kg', '250ml',
+  ]);
+  return tokens.some((token) => token.length >= 5 && !genericTokens.has(token));
+}
+
 function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult[] {
   if (ranked.length <= 1) return ranked;
 
@@ -222,7 +233,7 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
   );
 
   const successfulResults = initialResults.flatMap((result) => rankRetailerResults(result.results, query).slice(0, 2));
-  const shouldRetryMissingRetailers = successfulResults.length <= 2;
+  const shouldRetryMissingRetailers = successfulResults.length === 0 && !hasDistinctiveBrandSignal(query);
   const retryVariants = unique([
     ...generateQueryVariants(query),
     ...buildDerivedQueries(query, successfulResults),
