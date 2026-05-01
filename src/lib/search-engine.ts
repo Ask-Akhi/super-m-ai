@@ -14,6 +14,19 @@ import {
   unique,
 } from './search-intelligence';
 
+const INITIAL_RETAILER_TIMEOUT_MS = 8000;
+const RETRY_RETAILER_TIMEOUT_MS = 4500;
+const MAX_RETRY_VARIANTS = 3;
+const RETRYABLE_RETAILERS = new Set<RetailerName>([
+  'Coles',
+  'Woolworths',
+  'Aldi',
+  'IGA',
+  'Costco',
+  'Harris Farm',
+  'Big W',
+]);
+
 const ALL_RETAILERS: RetailerName[] = [
   'Coles',
   'Woolworths',
@@ -41,6 +54,28 @@ function pickBestAttempt(attempts: ScraperResult[], query: string): ScraperResul
     if (currentScore === bestScore && current.results.length > best.results.length) return current;
     return best;
   });
+}
+
+async function timeboxedRetailerSearch(
+  retailer: RetailerName,
+  query: string,
+  timeoutMs: number,
+): Promise<ScraperResult> {
+  const timeout = new Promise<ScraperResult>((resolve) => {
+    setTimeout(() => {
+      resolve({
+        retailer,
+        results: [],
+        status: 'error',
+        message: `Timed out after ${Math.round(timeoutMs / 1000)}s`,
+      });
+    }, timeoutMs);
+  });
+
+  return Promise.race([
+    scrapeRetailerWithStatus(retailer, query),
+    timeout,
+  ]);
 }
 
 function getCachedRetailerFallback(retailer: RetailerName, variants: string[], query: string): ScraperResult | null {
@@ -140,8 +175,14 @@ function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductR
 function chooseCheapestValidMatch(ranked: ProductResult[], query: string): ProductResult | null {
   if (ranked.length === 0) return null;
   const bestScore = scoreProduct(ranked[0], query);
-  const threshold = Math.max(bestScore - 18, 24);
-  const comparable = ranked.filter((result) => scoreProduct(result, query) >= threshold);
+  const bestProfile = tokenize(query).filter((token) => normalizeText(ranked[0].productName).includes(token));
+  const threshold = Math.max(bestScore - 12, 30);
+  const comparable = ranked.filter((result) => {
+    const score = scoreProduct(result, query);
+    if (score < threshold) return false;
+    const resultText = normalizeText(`${result.productName} ${result.unit ?? ''}`);
+    return bestProfile.every((token) => resultText.includes(token) || tokenize(query).length <= 2);
+  });
   return [...comparable].sort((a, b) => a.price - b.price)[0] ?? ranked[0];
 }
 
@@ -177,23 +218,29 @@ function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult
 
 export async function runSmartSearch(query: string): Promise<SearchResponse> {
   const initialResults = await Promise.all(
-    ALL_RETAILERS.map((retailer) => scrapeRetailerWithStatus(retailer, query)),
+    ALL_RETAILERS.map((retailer) => timeboxedRetailerSearch(retailer, query, INITIAL_RETAILER_TIMEOUT_MS)),
   );
 
   const successfulResults = initialResults.flatMap((result) => rankRetailerResults(result.results, query).slice(0, 2));
+  const shouldRetryMissingRetailers = successfulResults.length <= 2;
   const retryVariants = unique([
     ...generateQueryVariants(query),
     ...buildDerivedQueries(query, successfulResults),
     ...buildDerivedQueries(query, initialResults.flatMap((result) => result.results).filter((result) => tokenize(result.productName).some((token) => tokenize(query).includes(token))).slice(0, 8)),
-  ]).slice(0, 8);
+  ]).slice(0, MAX_RETRY_VARIANTS);
 
   const finalResults = await Promise.all(initialResults.map(async (initial) => {
-    if (rankRetailerResults(initial.results, query).length > 0 || retryVariants.length <= 1) return initial;
+    if (
+      rankRetailerResults(initial.results, query).length > 0
+      || retryVariants.length <= 1
+      || !RETRYABLE_RETAILERS.has(initial.retailer)
+      || !shouldRetryMissingRetailers
+    ) return initial;
 
     const attempts: ScraperResult[] = [initial];
     for (const variant of retryVariants) {
       if (normalizeText(variant) === normalizeText(query)) continue;
-      const retry = await scrapeRetailerWithStatus(initial.retailer, variant);
+      const retry = await timeboxedRetailerSearch(initial.retailer, variant, RETRY_RETAILER_TIMEOUT_MS);
       attempts.push(retry);
       if (rankRetailerResults(retry.results, query).length > 0) break;
     }

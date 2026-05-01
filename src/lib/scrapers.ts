@@ -715,7 +715,7 @@ const RETAILER_DOMAIN: Partial<Record<RetailerName, string>> = {
   'Big W': 'bigw.com.au',
 };
 
-// Grocery retailers where we try Google Shopping as a fallback if blocked
+// Grocery retailers where we try Google Shopping as a fallback on hard failures
 const GROCERY_RETAILERS = new Set<RetailerName>(['Coles', 'Woolworths', 'Aldi', 'IGA', 'Harris Farm', 'Costco']);
 
 export async function scrapeRetailerWithStatus(retailer: RetailerName, query: string): Promise<ScraperResult> {
@@ -737,8 +737,9 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
     default:            return { retailer, results: [], status: 'error', message: 'Unknown retailer' };
   }
 
-  // If blocked/errored for a grocery retailer, try Google Shopping as fallback
-  if ((result.status === 'error' || result.status === 'empty') && GROCERY_RETAILERS.has(retailer)) {
+  // Only use Google Shopping when the retailer request failed outright.
+  // If a retailer returned "empty", keep that signal instead of inventing weak substitutes.
+  if (result.status === 'error' && GROCERY_RETAILERS.has(retailer)) {
     try {
       const domain = RETAILER_DOMAIN[retailer];
       const gSearch = await scrapeGoogleShopping(query, domain);

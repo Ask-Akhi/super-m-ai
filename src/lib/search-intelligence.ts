@@ -5,6 +5,13 @@ const STOP_WORDS = new Set([
   'coles', 'woolworths', 'aldi', 'iga', 'costco', 'harris', 'farm', 'amazon', 'au', 'target', 'officeworks', 'big', 'kmart', 'chemist', 'warehouse', 'priceline', 'organic',
 ]);
 
+const GENERIC_GROCERY_TOKENS = new Set([
+  'milk', 'almond', 'bread', 'loaf', 'eggs', 'egg', 'free', 'range', 'cheese', 'greek', 'yoghurt', 'yogurt',
+  'coffee', 'instant', 'olive', 'oil', 'dal', 'dhal', 'toor', 'tur', 'tuvar', 'arhar', 'pigeon', 'peas',
+  'rice', 'lentils', 'flour', 'chicken', 'breast', 'full', 'cream', 'skim', 'natural', 'vanilla', 'unsweetened',
+  'barista', 'extra', 'virgin',
+]);
+
 const SIZE_PATTERN = /\b\d+(?:\.\d+)?\s?(?:kg|g|l|ml|pack|pk|ct|count|x)\b/gi;
 
 const GROCERY_SYNONYM_GROUPS = [
@@ -92,6 +99,8 @@ type MatchProfile = {
   productText: string;
   matchedTokens: string[];
   unmatchedTokens: string[];
+  distinctiveQueryTokens: string[];
+  unmatchedDistinctiveTokens: string[];
   coverage: number;
   intent: QueryIntent;
 };
@@ -309,6 +318,8 @@ export function getMatchProfile(result: ProductResult, query: string): MatchProf
   ));
   const coverage = queryTokens.length > 0 ? matchedTokens.length / queryTokens.length : 0;
   const unmatchedTokens = queryTokens.filter((token) => !matchedTokens.includes(token));
+  const distinctiveQueryTokens = queryTokens.filter((token) => !GENERIC_GROCERY_TOKENS.has(token) && !extractSizeHints(token).length);
+  const unmatchedDistinctiveTokens = distinctiveQueryTokens.filter((token) => !matchedTokens.includes(token));
 
   return {
     queryTokens,
@@ -316,13 +327,25 @@ export function getMatchProfile(result: ProductResult, query: string): MatchProf
     productText,
     matchedTokens,
     unmatchedTokens,
+    distinctiveQueryTokens,
+    unmatchedDistinctiveTokens,
     coverage,
     intent: detectQueryIntent(query),
   };
 }
 
 export function scoreProduct(result: ProductResult, query: string): number {
-  const { queryTokens, productTokens, productText, matchedTokens, unmatchedTokens, coverage, intent } = getMatchProfile(result, query);
+  const {
+    queryTokens,
+    productTokens,
+    productText,
+    matchedTokens,
+    unmatchedTokens,
+    distinctiveQueryTokens,
+    unmatchedDistinctiveTokens,
+    coverage,
+    intent,
+  } = getMatchProfile(result, query);
   const queryText = normalizeText(query);
   const querySizes = extractSizeHints(query);
   const productSizes = extractSizeHints(`${result.productName} ${result.unit ?? ''}`);
@@ -337,6 +360,8 @@ export function scoreProduct(result: ProductResult, query: string): number {
   if (productText.includes(queryText)) score += 20;
   score += Math.round(coverage * 20);
   if (matchedTokens.length === queryTokens.length && queryTokens.length > 1) score += 18;
+  if (distinctiveQueryTokens.length > 0 && unmatchedDistinctiveTokens.length === 0) score += 18;
+  if (unmatchedDistinctiveTokens.length > 0) score -= unmatchedDistinctiveTokens.length * 22;
 
   if (intent.anchorTokens.length > 0) {
     const hasAnchor = intent.anchorTokens.some((token) => productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
@@ -426,6 +451,7 @@ export function rankRetailerResults(results: ProductResult[], query: string): Pr
         const productHasOlive = profile.productTokens.some((productToken) => areTokensEquivalent('olive', productToken));
         if (queryNeedsOlive && !productHasOlive) return false;
       }
+      if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) return false;
       if (profile.intent.anchorTokens.length > 0 && profile.matchedTokens.length === 0) return false;
       if (profile.queryTokens.length <= 1) return score > 0;
       if (profile.queryTokens.length === 2) return profile.matchedTokens.length >= 2 && score > 22;
