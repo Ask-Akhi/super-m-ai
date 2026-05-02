@@ -4,9 +4,12 @@ import { searchCache } from './db';
 import {
   buildDerivedQueries,
   dedupeResults,
+  GENERAL_RETAILERS,
   generateQueryVariants,
   GROCERY_FIRST_RETAILERS,
+  isStapleGroceryQuery,
   MARKETPLACE_RETAILERS,
+  MIXED_RETAILERS,
   normalizeText,
   rankRetailerResults,
   scoreProduct,
@@ -193,6 +196,38 @@ function chooseCheapestValidMatch(ranked: ProductResult[], query: string): Produ
   return [...comparable].sort((a, b) => a.price - b.price)[0] ?? ranked[0];
 }
 
+function sanitizeStapleQueryResults(query: string, ranked: ProductResult[], statuses: RetailerSearchStatus[]) {
+  const stapleQuery = isStapleGroceryQuery(query);
+  if (!stapleQuery) {
+    return { results: ranked, statuses, suppressed: false };
+  }
+
+  const groceryFirstResults = ranked.filter((result) => GROCERY_FIRST_RETAILERS.has(result.retailer));
+  if (groceryFirstResults.length > 0) {
+    return { results: ranked, statuses, suppressed: false };
+  }
+
+  const filteredResults = ranked.filter((result) => !GENERAL_RETAILERS.has(result.retailer));
+  const hasNonGeneralFallback = filteredResults.some((result) => MARKETPLACE_RETAILERS.has(result.retailer) || MIXED_RETAILERS.has(result.retailer));
+
+  if (hasNonGeneralFallback) {
+    return { results: filteredResults, statuses, suppressed: false };
+  }
+
+  const sanitizedStatuses = statuses.map((status) => (
+    GENERAL_RETAILERS.has(status.retailer) && status.status === 'ok'
+      ? {
+        ...status,
+        status: 'empty' as const,
+        count: 0,
+        message: 'General retail fallback was suppressed because no supermarket could verify this grocery query.',
+      }
+      : status
+  ));
+
+  return { results: [], statuses: sanitizedStatuses, suppressed: ranked.length > 0 };
+}
+
 function hasDistinctiveBrandSignal(query: string): boolean {
   const tokens = tokenize(query);
   return tokens.some((token) => token.length >= 5 && !GENERIC_QUERY_TOKENS.has(token));
@@ -305,18 +340,21 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
     });
 
   const dedupedRankedResults = resolveBestMatch(dedupeResults(rankedResults), query);
-  const statuses = finalResults.map((result) => toRetailerStatus(result, query));
-  const cheapest = chooseCheapestValidMatch(dedupedRankedResults, query);
-  const insights = buildInsights(query, dedupedRankedResults, cheapest, statuses);
-  const summary = buildSummary(query, dedupedRankedResults, cheapest, statuses);
+  const baseStatuses = finalResults.map((result) => toRetailerStatus(result, query));
+  const sanitized = sanitizeStapleQueryResults(query, dedupedRankedResults, baseStatuses);
+  const cheapest = chooseCheapestValidMatch(sanitized.results, query);
+  const insights = buildInsights(query, sanitized.results, cheapest, sanitized.statuses);
+  const summary = sanitized.suppressed
+    ? `Live retailer searches only returned general-retail fallback matches for "${query}", so Super M AI held them back instead of showing a misleading supermarket answer.`
+    : buildSummary(query, sanitized.results, cheapest, sanitized.statuses);
 
   return {
     query,
-    results: dedupedRankedResults,
+    results: sanitized.results,
     cheapest,
     summary,
     insights,
     searchedAt: new Date().toISOString(),
-    retailerStatuses: statuses,
+    retailerStatuses: sanitized.statuses,
   };
 }

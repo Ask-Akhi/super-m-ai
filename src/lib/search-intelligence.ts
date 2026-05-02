@@ -47,8 +47,8 @@ const TOKEN_EQUIVALENTS: Record<string, string[]> = {
 const ACCESSORY_TOKENS = ['maker', 'machine', 'bottle', 'thermos', 'container', 'containers', 'lunchbox', 'jar', 'jars', 'drink', 'dispenser', 'spout'];
 const NON_FOOD_TOKENS = ['mask', 'masks', 'sheet', 'serum', 'cream', 'moisturiser', 'moisturizer', 'anti', 'aging', 'vitamin', 'charger', 'cosmetic', 'beauty', 'wash', 'body', 'paint', 'shower', 'soap', 'cleanser', 'toner', 'skincare', 'artists', 'artist', 'watermixable'];
 export const GROCERY_FIRST_RETAILERS = new Set(['Woolworths', 'Coles', 'Aldi', 'IGA', 'Harris Farm', 'Costco']);
-const MIXED_RETAILERS = new Set(['Big W', 'Target']);
-const GENERAL_RETAILERS = new Set(['Officeworks']);
+export const MIXED_RETAILERS = new Set(['Big W', 'Target']);
+export const GENERAL_RETAILERS = new Set(['Officeworks']);
 export const MARKETPLACE_RETAILERS = new Set(['Amazon AU']);
 
 const CATEGORY_PROFILES = [
@@ -263,6 +263,11 @@ function detectQueryIntent(query: string): QueryIntent {
     discouragingTokens: profile.discouraging,
     foodLike: true,
   };
+}
+
+export function isStapleGroceryQuery(query: string): boolean {
+  const intent = detectQueryIntent(query);
+  return !!intent.categoryId || tokenize(query).length >= 3;
 }
 
 export function areTokensEquivalent(queryToken: string, productToken: string): boolean {
