@@ -455,6 +455,9 @@ export function scoreProduct(result: ProductResult, query: string): number {
     if (GENERAL_RETAILERS.has(result.retailer)) score -= 10;
     if (MARKETPLACE_RETAILERS.has(result.retailer)) score -= 8;
   }
+  if (intent.categoryId === 'milk' && GENERAL_RETAILERS.has(result.retailer)) {
+    score -= 18;
+  }
 
   if (querySizes.length > 0) {
     const matchingSizes = querySizes.filter((size) => productSizes.some((productSize) => sizesAreCompatible(size, productSize, intent.categoryId)));
@@ -468,6 +471,9 @@ export function scoreProduct(result: ProductResult, query: string): number {
 
   if (/pack of|x\s?\d+|\b\d+\s?pack\b/i.test(result.productName) && querySizes.length === 0) {
     score -= 8;
+  }
+  if (intent.categoryId === 'milk' && /\bmini\b/i.test(result.productName)) {
+    score -= 22;
   }
 
   if (!result.inStock) score -= 20;

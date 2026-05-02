@@ -98,6 +98,24 @@ async function postJson<T>(url: string, body: unknown, cfg?: AxiosRequestConfig)
   return r.data as T;
 }
 
+function buildRetailerQueryVariants(query: string): string[] {
+  const normalized = normalizeSearchText(query);
+  const variants = new Set<string>([query.trim(), normalized]);
+
+  if (normalized.includes('milklab') && normalized.includes('almond') && normalized.includes('milk')) {
+    variants.add('milklab home barista almond');
+    variants.add('milklab home barista almond milk');
+    variants.add('milklab almond');
+  }
+
+  if (normalized.includes('free range eggs 12 pack')) {
+    variants.add('free range eggs');
+    variants.add('12 free range eggs');
+  }
+
+  return [...variants].filter(Boolean);
+}
+
 function parsePrice(t: string): number | null {
   if (!t) return null;
   const m = t.replace(/,/g, '').replace(/\s/g, '').match(/\$?([\d]{1,5}\.[\d]{1,2})/);
@@ -257,23 +275,25 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
 
 // ── WOOLWORTHS ────────────────────────────────────────────────────────────────
 export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
-  try {
+  for (const variant of buildRetailerQueryVariants(query)) {
+    try {
     type WP = { Name: string; Price: number; WasPrice?: number; PackageSize?: string; CupPrice?: number; MediumImageFile?: string; Stockcode?: number; IsInStock?: boolean; IsOnSpecial?: boolean };
     type WR = { Products?: Array<{ Products?: WP[] }>; SearchResultsCount?: number };
     const data = await getJson<WR>(
-      `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(query)}&pageNumber=1&pageSize=8&sortType=TraderRelevance&isMobile=false`,
+      `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(variant)}&pageNumber=1&pageSize=8&sortType=TraderRelevance&isMobile=false`,
       {
         headers: {
           ...JSON_HEADERS,
-          Referer: 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + encodeURIComponent(query),
+          Referer: 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + encodeURIComponent(variant),
           Origin: 'https://www.woolworths.com.au',
           'x-requested-with': 'XMLHttpRequest',
           Cookie: 'wow-auth-token=; _abck=; ak_bmsc=',
         },
+        timeout: 4000,
       });
     const products = data?.Products?.[0]?.Products ?? [];
-    if (!products.length) return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths results' };
-    const results: ProductResult[] = products.slice(0, 8).map((p) => ({
+      if (!products.length) continue;
+      const results: ProductResult[] = products.slice(0, 8).map((p) => ({
       retailer: 'Woolworths' as RetailerName,
       productName: p.Name,
       price: p.Price ?? 0,
@@ -288,16 +308,21 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
       onSale: !!p.IsOnSpecial,
       scrapedAt: ts(),
     })).filter((r) => r.productName && r.price > 0);
-    return results.length
-      ? { retailer: 'Woolworths', results, status: 'ok' }
-      : { retailer: 'Woolworths', results: [], status: 'empty' };
-  } catch (err) {
-    // Woolworths blocks server IPs — try their public catalogue API
+      if (results.length) {
+        return {
+          retailer: 'Woolworths',
+          results,
+          status: 'ok',
+          message: variant !== query ? `Resolved via Woolworths variant "${variant}"` : undefined,
+        };
+      }
+    } catch (err) {
+      // Woolworths blocks some server paths — try their public catalogue API for the same variant
     try {
       type CatalogItem = { name?: string; price?: number; wasPrice?: number; size?: string; imageUrl?: string; urlFriendlyName?: string; stockcode?: number };
       const fallback = await getJson<{ totalRecordCount?: number; products?: CatalogItem[] }>(
-        `https://www.woolworths.com.au/apis/ui/browse/category?categoryId=1_A8K4E&pageNumber=1&pageSize=8&sortType=TraderRelevance&filters=&keyword=${encodeURIComponent(query)}`,
-        { headers: { ...JSON_HEADERS, Referer: 'https://www.woolworths.com.au/' } }
+        `https://www.woolworths.com.au/apis/ui/browse/category?categoryId=1_A8K4E&pageNumber=1&pageSize=8&sortType=TraderRelevance&filters=&keyword=${encodeURIComponent(variant)}`,
+        { headers: { ...JSON_HEADERS, Referer: 'https://www.woolworths.com.au/' }, timeout: 4000 }
       );
       const prods = fallback?.products ?? [];
       if (prods.length) {
@@ -313,11 +338,22 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
           onSale: !!(p.wasPrice && p.wasPrice > (p.price ?? 0)),
           scrapedAt: ts(),
         })).filter((r) => r.productName && r.price > 0);
-        if (results.length) return { retailer: 'Woolworths', results, status: 'ok' };
+          if (results.length) {
+            return {
+              retailer: 'Woolworths',
+              results,
+              status: 'ok',
+              message: variant !== query ? `Resolved via Woolworths fallback variant "${variant}"` : 'Resolved via Woolworths catalogue fallback',
+            };
+          }
       }
     } catch { /* fall through */ }
-    return { retailer: 'Woolworths', results: [], status: 'error', message: String(err) };
+      if (variant === query) {
+        continue;
+      }
+    }
   }
+  return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths results' };
 }
 
 // ── ALDI ──────────────────────────────────────────────────────────────────────
