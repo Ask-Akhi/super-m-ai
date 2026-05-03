@@ -369,79 +369,58 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
     try {
     type WP = { Name: string; Price: number; WasPrice?: number; PackageSize?: string; CupPrice?: number; MediumImageFile?: string; Stockcode?: number; IsInStock?: boolean; IsOnSpecial?: boolean };
     type WR = { Products?: Array<{ Products?: WP[] }>; SearchResultsCount?: number };
-    const data = await getJson<WR>(
-      `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(variant)}&pageNumber=1&pageSize=8&sortType=TraderRelevance&isMobile=false`,
-      {
-        headers: {
-          ...JSON_HEADERS,
-          Referer: 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + encodeURIComponent(variant),
-          Origin: 'https://www.woolworths.com.au',
-          'x-requested-with': 'XMLHttpRequest',
-          Cookie: 'wow-auth-token=; _abck=; ak_bmsc=',
-        },
-        timeout: 4000,
-      });
-    const products = data?.Products?.[0]?.Products ?? [];
-      if (!products.length) continue;
-      const results: ProductResult[] = products.slice(0, 8).map((p) => ({
-      retailer: 'Woolworths' as RetailerName,
-      productName: p.Name,
-      price: p.Price ?? 0,
-      originalPrice: p.WasPrice && p.WasPrice !== p.Price ? p.WasPrice : undefined,
-      unit: p.PackageSize,
-      pricePerUnit: p.CupPrice ? parseFloat(p.CupPrice.toFixed(2)) : undefined,
-      imageUrl: p.MediumImageFile
-        ? (p.MediumImageFile.startsWith('http') ? p.MediumImageFile : `https://cdn0.woolworths.media/content/wowproductimages/medium/${p.MediumImageFile}`)
-        : '',
-      productUrl: `https://www.woolworths.com.au/shop/productdetails/${p.Stockcode ?? ''}`,
-      inStock: p.IsInStock ?? true,
-      onSale: !!p.IsOnSpecial,
-      scrapedAt: ts(),
-    })).filter((r) => r.productName && r.price > 0);
-      if (results.length) {
-        return {
-          retailer: 'Woolworths',
-          results,
-          status: 'ok',
-          message: variant !== query ? `Resolved via Woolworths variant "${variant}"` : undefined,
-        };
-      }
-    } catch (err) {
-      // Woolworths blocks some server paths — try their public catalogue API for the same variant
+    const woolworthsHeaders = {
+      ...JSON_HEADERS,
+      Referer: 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + encodeURIComponent(variant),
+      Origin: 'https://www.woolworths.com.au',
+      'x-requested-with': 'XMLHttpRequest',
+      'x-client-version': '6.0.0',
+      Cookie: 'wow-auth-token=; _abck=; bm_sz=',
+    };
+    // Try the newer /api/2/search endpoint first, fall back to legacy
+    let data: WR | null = null;
     try {
-      type CatalogItem = { name?: string; price?: number; wasPrice?: number; size?: string; imageUrl?: string; urlFriendlyName?: string; stockcode?: number };
-      const fallback = await getJson<{ totalRecordCount?: number; products?: CatalogItem[] }>(
-        `https://www.woolworths.com.au/apis/ui/browse/category?categoryId=1_A8K4E&pageNumber=1&pageSize=8&sortType=TraderRelevance&filters=&keyword=${encodeURIComponent(variant)}`,
-        { headers: { ...JSON_HEADERS, Referer: 'https://www.woolworths.com.au/' }, timeout: 4000 }
+      data = await getJson<WR>(
+        `https://www.woolworths.com.au/apis/ui/Search/products?searchTerm=${encodeURIComponent(variant)}&pageNumber=1&pageSize=10&sortType=TraderRelevance&isMobile=false&filters=`,
+        { headers: woolworthsHeaders, timeout: 12000 },
       );
-      const prods = fallback?.products ?? [];
-      if (prods.length) {
-        const results: ProductResult[] = prods.map((p) => ({
+    } catch {
+      // Try alternate Woolworths endpoint
+      try {
+        data = await postJson<WR>(
+          'https://www.woolworths.com.au/apis/ui/Search/products',
+          { SearchTerm: variant, PageNumber: 1, PageSize: 10, SortType: 'TraderRelevance', Filters: [] },
+          { headers: woolworthsHeaders, timeout: 10000 },
+        );
+      } catch { data = null; }
+    }
+    const products = data?.Products?.[0]?.Products ?? [];
+      if (products.length) {
+        const results: ProductResult[] = products.slice(0, 10).map((p) => ({
           retailer: 'Woolworths' as RetailerName,
-          productName: p.name ?? '',
-          price: p.price ?? 0,
-          originalPrice: p.wasPrice && p.wasPrice !== p.price ? p.wasPrice : undefined,
-          unit: p.size,
-          imageUrl: p.imageUrl ?? '',
-          productUrl: `https://www.woolworths.com.au/shop/productdetails/${p.stockcode ?? ''}`,
-          inStock: true,
-          onSale: !!(p.wasPrice && p.wasPrice > (p.price ?? 0)),
+          productName: p.Name,
+          price: p.Price ?? 0,
+          originalPrice: p.WasPrice && p.WasPrice !== p.Price ? p.WasPrice : undefined,
+          unit: p.PackageSize,
+          pricePerUnit: p.CupPrice ? parseFloat(p.CupPrice.toFixed(2)) : undefined,
+          imageUrl: p.MediumImageFile
+            ? (p.MediumImageFile.startsWith('http') ? p.MediumImageFile : `https://cdn0.woolworths.media/content/wowproductimages/medium/${p.MediumImageFile}`)
+            : '',
+          productUrl: `https://www.woolworths.com.au/shop/productdetails/${p.Stockcode ?? ''}`,
+          inStock: p.IsInStock ?? true,
+          onSale: !!p.IsOnSpecial,
           scrapedAt: ts(),
         })).filter((r) => r.productName && r.price > 0);
-          if (results.length) {
-            return {
-              retailer: 'Woolworths',
-              results,
-              status: 'ok',
-              message: variant !== query ? `Resolved via Woolworths fallback variant "${variant}"` : 'Resolved via Woolworths catalogue fallback',
-            };
-          }
+        if (results.length) {
+          return {
+            retailer: 'Woolworths',
+            results,
+            status: 'ok',
+            message: variant !== query ? `Resolved via Woolworths variant "${variant}"` : undefined,
+          };
+        }
       }
-    } catch { /* fall through */ }
-      if (variant === query) {
-        continue;
-      }
-    }
+    } catch { /* fall through to next variant */ }
   }
   return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths results' };
 }

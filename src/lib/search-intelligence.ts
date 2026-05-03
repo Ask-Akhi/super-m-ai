@@ -488,7 +488,14 @@ export function scoreProduct(result: ProductResult, query: string): number {
     }
   }
 
-  if (/pack of|x\s?\d+|\b\d+\s?pack\b/i.test(result.productName) && querySizes.length === 0) {
+  // Penalise multipack products when the query doesn't mention a pack/count
+  if (querySizes.length === 0 && !/\bpack\b/i.test(query)) {
+    const packCountMatch = result.productName.match(/\b(\d+)\s?(?:pack|pk)\b/i);
+    const packCount = packCountMatch ? parseInt(packCountMatch[1], 10) : 0;
+    if (packCount >= 4) score -= 40;       // 4-pack, 6-pack, 8-pack, 12-pack …
+    else if (packCount >= 2) score -= 18;  // 2-pack, 3-pack
+    else if (/pack of|x\s?\d+/i.test(result.productName)) score -= 10;
+  } else if (/pack of|x\s?\d+|\b\d+\s?pack\b/i.test(result.productName) && querySizes.length === 0) {
     score -= 8;
   }
   if (intent.categoryId === 'milk' && /\bmini\b/i.test(result.productName)) {
