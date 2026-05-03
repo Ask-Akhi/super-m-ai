@@ -20,3 +20,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: SCRAPER_PROXY_URL
+        sync: false
+      - key: SCRAPER_PROXY_TOKEN
+        sync: false

@@ -30,6 +30,9 @@ const JSON_HEADERS = {
   'Sec-Fetch-Site': 'same-origin',
 };
 
+const SCRAPER_PROXY_URL = process.env.SCRAPER_PROXY_URL?.trim();
+const SCRAPER_PROXY_TOKEN = process.env.SCRAPER_PROXY_TOKEN?.trim();
+
 // ── Open Food Facts — free, unblocked product data ───────────────────────────
 export async function scrapeOpenFoodFacts(query: string): Promise<ScraperResult> {
   try {
@@ -118,18 +121,71 @@ export async function scrapeGoogleShopping(query: string, retailerDomain?: strin
 }
 
 async function get(url: string, cfg?: AxiosRequestConfig): Promise<string> {
+  if (SCRAPER_PROXY_URL) {
+    return proxyRequest<string>('GET', url, cfg, 'text');
+  }
   const r = await axios.get(url, { headers: BASE_HEADERS, timeout: 15000, maxRedirects: 5, ...cfg });
   return r.data as string;
 }
 
 async function getJson<T>(url: string, cfg?: AxiosRequestConfig): Promise<T> {
+  if (SCRAPER_PROXY_URL) {
+    return proxyRequest<T>('GET', url, cfg, 'json');
+  }
   const r = await axios.get(url, { headers: JSON_HEADERS, timeout: 15000, maxRedirects: 5, ...cfg });
   return r.data as T;
 }
 
 async function postJson<T>(url: string, body: unknown, cfg?: AxiosRequestConfig): Promise<T> {
+  if (SCRAPER_PROXY_URL) {
+    return proxyRequest<T>('POST', url, { ...cfg, data: body }, 'json');
+  }
   const r = await axios.post(url, body, { headers: JSON_HEADERS, timeout: 15000, maxRedirects: 5, ...cfg });
   return r.data as T;
+}
+
+type ProxyMode = 'text' | 'json';
+
+async function proxyRequest<T>(
+  method: 'GET' | 'POST',
+  url: string,
+  cfg: AxiosRequestConfig | undefined,
+  mode: ProxyMode,
+): Promise<T> {
+  const response = await axios.post(
+    SCRAPER_PROXY_URL!,
+    {
+      url,
+      method,
+      headers: cfg?.headers ?? (mode === 'json' ? JSON_HEADERS : BASE_HEADERS),
+      body: cfg?.data ?? null,
+      mode,
+    },
+    {
+      timeout: cfg?.timeout ?? 20000,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(SCRAPER_PROXY_TOKEN ? { 'x-proxy-token': SCRAPER_PROXY_TOKEN } : {}),
+      },
+    },
+  );
+
+  const payload = response.data as {
+    ok: boolean;
+    status: number;
+    body: string;
+    statusText?: string;
+  };
+
+  if (!payload.ok) {
+    throw new Error(`Proxy upstream ${payload.status}${payload.statusText ? ` ${payload.statusText}` : ''}`);
+  }
+
+  if (mode === 'json') {
+    return JSON.parse(payload.body) as T;
+  }
+
+  return payload.body as T;
 }
 
 function buildRetailerQueryVariants(query: string): string[] {

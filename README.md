@@ -52,6 +52,8 @@ CAP_SERVER_URL=https://grocerywithai.com
 | `OPENAI_API_KEY` | Your OpenAI API key |
 | `NEXT_PUBLIC_APP_URL` | App URL (default: http://localhost:3000) |
 | `CAP_SERVER_URL` | Hosted HTTPS URL used by the native iOS/Android wrapper |
+| `SCRAPER_PROXY_URL` | Optional Cloudflare Worker proxy URL for retailer scraping |
+| `SCRAPER_PROXY_TOKEN` | Shared secret sent to the Worker proxy |
 
 ## 📦 Tech Stack
 - **Next.js 15** (App Router)
@@ -112,7 +114,65 @@ This repo now includes [render.yaml](./render.yaml) for a Render web service.
    - `GEMINI_API_KEY` if still used
    - `NEXT_PUBLIC_APP_URL=https://grocerywithai.com`
    - `CAP_SERVER_URL=https://grocerywithai.com`
+   - `SCRAPER_PROXY_URL=https://<your-worker>.workers.dev`
+   - `SCRAPER_PROXY_TOKEN=<same secret stored in Cloudflare Workers>`
 5. Deploy the service and confirm the `onrender.com` URL works.
+
+## ☁️ Free Cloudflare Worker Scraper Proxy
+
+This project now includes a free Cloudflare Worker proxy in [`cloudflare-worker/`](./cloudflare-worker) so retailer fetches can run from Cloudflare's IP pool instead of your Render server IP.
+
+Why this helps:
+- Coles / Woolworths / other AU retailers may block or degrade responses from Render IPs
+- Cloudflare Workers use a different network path
+- The app can keep its current search logic, but external retailer requests are proxied through the Worker
+
+### Deploy the Worker
+
+1. Install Wrangler:
+
+```bash
+npm install -g wrangler
+```
+
+2. Log in:
+
+```bash
+wrangler login
+```
+
+3. In [`cloudflare-worker/`](./cloudflare-worker), copy `wrangler.toml.example` to `wrangler.toml`.
+
+4. Set the shared secret:
+
+```bash
+wrangler secret put SCRAPER_PROXY_TOKEN
+```
+
+5. Deploy:
+
+```bash
+cd cloudflare-worker
+wrangler deploy
+```
+
+6. Copy the Worker URL and set these in Render:
+
+```bash
+SCRAPER_PROXY_URL=https://<your-worker>.workers.dev
+SCRAPER_PROXY_TOKEN=<same secret value>
+```
+
+7. In Render, run `Manual Deploy` → `Clear build cache & deploy`.
+
+### What the proxy does
+
+- Accepts a signed POST request from your app
+- Validates the target host against an allowlist
+- Fetches the retailer page / JSON from Cloudflare's edge
+- Returns the raw response body to the app
+
+This is the simplest free way to fix the "works locally but fails on the purchased domain" problem at the network/source layer.
 
 ### Custom domain on Render
 1. In Render, open your web service.
