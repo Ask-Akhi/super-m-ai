@@ -204,7 +204,17 @@ function sanitizeStapleQueryResults(query: string, ranked: ProductResult[], stat
 
   const groceryFirstResults = ranked.filter((result) => GROCERY_FIRST_RETAILERS.has(result.retailer));
   if (groceryFirstResults.length > 0) {
-    return { results: ranked, statuses, suppressed: false };
+    const sanitizedStatuses = statuses.map((status) => (
+      !GROCERY_FIRST_RETAILERS.has(status.retailer) && status.status === 'ok'
+        ? {
+          ...status,
+          status: 'empty' as const,
+          count: 0,
+          message: 'Supplementary retailer results were hidden because verified supermarket matches are available for this grocery query.',
+        }
+        : status
+    ));
+    return { results: groceryFirstResults, statuses: sanitizedStatuses, suppressed: false };
   }
 
   const filteredResults = ranked.filter((result) => !GENERAL_RETAILERS.has(result.retailer));

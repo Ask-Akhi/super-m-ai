@@ -10,6 +10,15 @@ interface Props {
 export default function ResultsGrid({ results, cheapest }: Props) {
   if (results.length === 0) return null;
 
+  const getImageSrc = (imageUrl?: string) => {
+    if (!imageUrl) return '';
+    if (imageUrl.startsWith('/api/image?url=')) return imageUrl;
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      return `/api/image?url=${encodeURIComponent(imageUrl)}`;
+    }
+    return imageUrl;
+  };
+
   return (
     <div className="w-full">
       <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -68,7 +77,7 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                 <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={r.imageUrl}
+                    src={getImageSrc(r.imageUrl)}
                     alt={r.productName}
                     className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
                     onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
