@@ -1,11 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const IMAGE_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-  'Accept-Language': 'en-AU,en-GB;q=0.9,en;q=0.8',
-  Referer: 'https://grocerywithai.com/',
+const BASE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+// Map CDN hostnames to the referer the CDN expects
+const CDN_REFERER_MAP: Record<string, string> = {
+  'cdn0.woolworths.media': 'https://www.woolworths.com.au/',
+  'woolworths.media': 'https://www.woolworths.com.au/',
+  'productimages.coles.com.au': 'https://www.coles.com.au/',
+  'coles.com.au': 'https://www.coles.com.au/',
+  'www.coles.com.au': 'https://www.coles.com.au/',
+  'media.harrisfarm.com.au': 'https://www.harrisfarm.com.au/',
+  'images.igashop.com.au': 'https://www.igashop.com.au/',
+  'assets.bigw.com.au': 'https://www.bigw.com.au/',
 };
+
+function getRefererForUrl(urlStr: string): string {
+  try {
+    const { hostname } = new URL(urlStr);
+    for (const [cdn, referer] of Object.entries(CDN_REFERER_MAP)) {
+      if (hostname === cdn || hostname.endsWith(`.${cdn}`)) return referer;
+    }
+  } catch { /* ignore */ }
+  return 'https://grocerywithai.com/';
+}
 
 function isAllowedImageUrl(value: string): boolean {
   try {
@@ -24,7 +41,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const upstream = await fetch(url, {
-      headers: IMAGE_HEADERS,
+      headers: {
+        'User-Agent': BASE_UA,
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'en-AU,en-GB;q=0.9,en;q=0.8',
+        Referer: getRefererForUrl(url),
+      },
       cache: 'no-store',
     });
 
@@ -39,7 +61,7 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
       },
     });
   } catch {

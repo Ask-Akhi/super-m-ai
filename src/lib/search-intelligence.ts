@@ -488,15 +488,15 @@ export function scoreProduct(result: ProductResult, query: string): number {
     }
   }
 
-  // Penalise multipack products when the query doesn't mention a pack/count
-  if (querySizes.length === 0 && !/\bpack\b/i.test(query)) {
+  // Penalise multipack products when the query doesn't ask for a multi-pack.
+  // This applies even if the query has a size hint (e.g. "almond milk 1l" should
+  // NOT match "Almond Milk 1L 8 Pack" — user wants a single unit, not a bulk pack).
+  if (!/\b\d+\s?(?:pack|pk)\b/i.test(query) && !/\bpack\b/i.test(query)) {
     const packCountMatch = result.productName.match(/\b(\d+)\s?(?:pack|pk)\b/i);
     const packCount = packCountMatch ? parseInt(packCountMatch[1], 10) : 0;
-    if (packCount >= 4) score -= 40;       // 4-pack, 6-pack, 8-pack, 12-pack …
-    else if (packCount >= 2) score -= 18;  // 2-pack, 3-pack
-    else if (/pack of|x\s?\d+/i.test(result.productName)) score -= 10;
-  } else if (/pack of|x\s?\d+|\b\d+\s?pack\b/i.test(result.productName) && querySizes.length === 0) {
-    score -= 8;
+    if (packCount >= 4) score -= 50;       // 4-pack, 6-pack, 8-pack, 12-pack …
+    else if (packCount >= 2) score -= 22;  // 2-pack, 3-pack
+    else if (/pack of|x\s?\d+/i.test(result.productName)) score -= 12;
   }
   if (intent.categoryId === 'milk' && /\bmini\b/i.test(result.productName)) {
     score -= 22;
