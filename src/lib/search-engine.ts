@@ -17,11 +17,11 @@ import {
   unique,
 } from './search-intelligence';
 
-const INITIAL_RETAILER_TIMEOUT_MS = 5000;
-const CORE_SUPERMARKET_TIMEOUT_MS = 6500;
-const RETRY_RETAILER_TIMEOUT_MS = 2000;
-const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 3000;
-const MAX_RETRY_VARIANTS = 2;
+const INITIAL_RETAILER_TIMEOUT_MS = 8000;
+const CORE_SUPERMARKET_TIMEOUT_MS = 10000;
+const RETRY_RETAILER_TIMEOUT_MS = 5000;
+const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 6000;
+const MAX_RETRY_VARIANTS = 4;
 const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Coles',
   'Woolworths',
@@ -197,45 +197,20 @@ function chooseCheapestValidMatch(ranked: ProductResult[], query: string): Produ
 }
 
 function sanitizeStapleQueryResults(query: string, ranked: ProductResult[], statuses: RetailerSearchStatus[]) {
+  // Always return results if we have them — never suppress
+  if (ranked.length === 0) return { results: ranked, statuses, suppressed: false };
+
   const stapleQuery = isStapleGroceryQuery(query);
-  if (!stapleQuery) {
+  if (!stapleQuery) return { results: ranked, statuses, suppressed: false };
+
+  // Prefer grocery-first results, but fall back to any results rather than showing nothing
+  const groceryFirstResults = ranked.filter((result) => GROCERY_FIRST_RETAILERS.has(result.retailer));
+  if (groceryFirstResults.length > 0) {
     return { results: ranked, statuses, suppressed: false };
   }
 
-  const groceryFirstResults = ranked.filter((result) => GROCERY_FIRST_RETAILERS.has(result.retailer));
-  if (groceryFirstResults.length > 0) {
-    const sanitizedStatuses = statuses.map((status) => (
-      !GROCERY_FIRST_RETAILERS.has(status.retailer) && status.status === 'ok'
-        ? {
-          ...status,
-          status: 'empty' as const,
-          count: 0,
-          message: 'Supplementary retailer results were hidden because verified supermarket matches are available for this grocery query.',
-        }
-        : status
-    ));
-    return { results: groceryFirstResults, statuses: sanitizedStatuses, suppressed: false };
-  }
-
-  const filteredResults = ranked.filter((result) => !GENERAL_RETAILERS.has(result.retailer));
-  const hasNonGeneralFallback = filteredResults.some((result) => MARKETPLACE_RETAILERS.has(result.retailer) || MIXED_RETAILERS.has(result.retailer));
-
-  if (hasNonGeneralFallback) {
-    return { results: filteredResults, statuses, suppressed: false };
-  }
-
-  const sanitizedStatuses = statuses.map((status) => (
-    GENERAL_RETAILERS.has(status.retailer) && status.status === 'ok'
-      ? {
-        ...status,
-        status: 'empty' as const,
-        count: 0,
-        message: 'General retail fallback was suppressed because no supermarket could verify this grocery query.',
-      }
-      : status
-  ));
-
-  return { results: [], statuses: sanitizedStatuses, suppressed: ranked.length > 0 };
+  // Return all results including marketplace/mixed — better than nothing
+  return { results: ranked, statuses, suppressed: false };
 }
 
 function hasDistinctiveBrandSignal(query: string): boolean {
@@ -305,7 +280,7 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
 
   const successfulResults = initialResults.flatMap((result) => rankRetailerResults(result.results, query).slice(0, 2));
   const hasBrandSignal = hasDistinctiveBrandSignal(query);
-  const shouldRetryMissingRetailers = successfulResults.length === 0 && !hasBrandSignal;
+  // Retry any retailer that failed, was blocked, or returned empty
   const retryVariants = unique([
     ...generateQueryVariants(query),
     ...buildDerivedQueries(query, successfulResults),
@@ -313,18 +288,15 @@ export async function runSmartSearch(query: string): Promise<SearchResponse> {
   ]).slice(0, MAX_RETRY_VARIANTS);
 
   const finalResults = await Promise.all(initialResults.map(async (initial) => {
-    const shouldRetryThisRetailer =
-      shouldRetryMissingRetailers
-      || (hasBrandSignal && CORE_SUPERMARKET_RETAILERS.has(initial.retailer));
+    const hasGoodResults = rankRetailerResults(initial.results, query).length > 0;
+    if (hasGoodResults) return initial;
+    if (!RETRYABLE_RETAILERS.has(initial.retailer)) return initial;
+    if (retryVariants.length <= 1) return initial;
 
-    if (
-      rankRetailerResults(initial.results, query).length > 0
-      || retryVariants.length <= 1
-      || !RETRYABLE_RETAILERS.has(initial.retailer)
-      || !shouldRetryThisRetailer
-    ) return initial;
+    const retailerRetryVariants = hasBrandSignal
+      ? getRetryVariantsForRetailer(initial.retailer, query, retryVariants)
+      : retryVariants;
 
-    const retailerRetryVariants = getRetryVariantsForRetailer(initial.retailer, query, retryVariants);
     const attempts: ScraperResult[] = [initial];
     for (const variant of retailerRetryVariants) {
       if (normalizeText(variant) === normalizeText(query)) continue;

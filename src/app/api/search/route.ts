@@ -11,12 +11,16 @@ const VAGUE_PATTERNS = [
   /^[a-z\s]{1,12}$/i, // very short queries under 12 chars with no brand/size qualifier
 ];
 const HAS_QUALIFIER = /([\d]+\s*(ml|l|g|kg|L|pack|pk|x\d)|brand|original|light|full\s*cream|skim|organic|free\s*range|wholemeal|sourdough|barista|soy|almond|oat|lactose)/i;
+// Known brand prefixes — never ask for clarification if a brand name is present
+const BRAND_PATTERN = /^(milklab|a2|oak|pauls|bonsoy|vitasoy|pureharvest|sanitarium|cocobella|alpro|freedom|uncle tobys|weet-bix|vegemite|milo|sustagen|hydralyte|nescafe|lavazza|harris|vittoria|campos|allpress|jarrah|moccona|bushells|liptons?|twinings|dilmah|tetley|nudie|just juice|daily juice|golden circle|berri|heinz|edgell|birds eye|mccain|steggles|inghams|coles|woolworths|homebrand|macro|select)\b/i;
 
 function needsClarification(query: string): string[] | null {
   const q = query.trim().toLowerCase();
   const wordCount = q.split(/\s+/).length;
-  // Already specific enough
-  if (wordCount >= 4 || HAS_QUALIFIER.test(query)) return null;
+  // Already specific enough — has a size/qualifier, has 3+ words, or has a known brand
+  if (wordCount >= 3) return null;
+  if (HAS_QUALIFIER.test(query)) return null;
+  if (BRAND_PATTERN.test(query.trim())) return null;
   if (wordCount === 1 && VAGUE_PATTERNS[0].test(q)) {
     // Suggest refinements based on keyword
     const map: Record<string, string[]> = {

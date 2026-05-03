@@ -301,7 +301,16 @@ export function generateQueryVariants(query: string): string[] {
   ];
 
   if (coreTokens.includes('milk') && coreTokens.includes('almond')) {
-    variants.push('almond milk', 'unsweetened almond milk');
+    variants.push('almond milk', 'unsweetened almond milk', 'almond milk 1L');
+  }
+  // Brand + product fallbacks — if brand not found, search by product type
+  const brandTokens = coreTokens.filter(t => t.length >= 5 && !['almond', 'cream', 'skimmed', 'oaten', 'fresh', 'light', 'whole', 'greek', 'plain', 'thick', 'extra', 'virgin', 'olive', 'split', 'pigeon', 'range', 'vanilla', 'natural', 'unsweetened', 'barista', 'organic'].includes(t));
+  const productTokens2 = coreTokens.filter(t => ['milk', 'bread', 'eggs', 'cheese', 'yoghurt', 'yogurt', 'coffee', 'oil', 'dal', 'dhal', 'rice', 'flour', 'butter', 'cream', 'juice'].includes(t));
+  if (brandTokens.length >= 1 && productTokens2.length >= 1) {
+    // Search by product type alone as fallback
+    variants.push(productTokens2.join(' '));
+    const sizeStr = sizeHints[0] ? ` ${sizeHints[0]}` : '';
+    variants.push(productTokens2.join(' ') + sizeStr);
   }
   if (coreTokens.includes('bread')) {
     variants.push(tokens.filter((token) => token !== 'loaf').join(' '));
@@ -540,11 +549,19 @@ export function rankRetailerResults(results: ProductResult[], query: string): Pr
           .some((token) => profile.productTokens.some((productToken) => areTokensEquivalent(token, productToken)));
         if (hasCoffeeAccessory) return false;
       }
-      if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) return false;
+      if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) {
+        // Only hard-filter if the product has NO match for ANY distinctive query token
+        // (allow partial brand matches — e.g. "Milklab Almond Milk" should match "Almond Milk 1L")
+        const hasAnyDistinctiveMatch = profile.distinctiveQueryTokens.some((token) =>
+          profile.productTokens.some((pt) => areTokensEquivalent(token, pt)) || profile.productText.includes(token)
+        );
+        if (!hasAnyDistinctiveMatch) return false;
+      }
       if (profile.intent.anchorTokens.length > 0 && profile.matchedTokens.length === 0) return false;
       if (profile.queryTokens.length <= 1) return score > 0;
-      if (profile.queryTokens.length === 2) return profile.matchedTokens.length >= 2 && score > 22;
-      return profile.matchedTokens.length >= Math.max(2, Math.ceil(profile.queryTokens.length * 0.6)) && score > 24;
+      if (profile.queryTokens.length === 2) return profile.matchedTokens.length >= 1 && score > 10;
+      // 3+ word queries: require at least 1 token match (not 60% — too strict for brand queries)
+      return profile.matchedTokens.length >= 1 && score > 10;
     })
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
