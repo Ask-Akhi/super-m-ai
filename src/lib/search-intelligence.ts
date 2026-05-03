@@ -303,6 +303,11 @@ export function generateQueryVariants(query: string): string[] {
   if (coreTokens.includes('milk') && coreTokens.includes('almond')) {
     variants.push('almond milk', 'unsweetened almond milk', 'almond milk 1L');
   }
+  // milklab-specific — very common search on grocerywithai
+  if (normalizeText(query).includes('milklab')) {
+    variants.push('milklab almond milk', 'milklab oat milk', 'milklab barista', 'milklab milk');
+    variants.push('almond milk 1L', 'barista almond milk');
+  }
   // Brand + product fallbacks — if brand not found, search by product type
   const brandTokens = coreTokens.filter(t => t.length >= 5 && !['almond', 'cream', 'skimmed', 'oaten', 'fresh', 'light', 'whole', 'greek', 'plain', 'thick', 'extra', 'virgin', 'olive', 'split', 'pigeon', 'range', 'vanilla', 'natural', 'unsweetened', 'barista', 'organic'].includes(t));
   const productTokens2 = coreTokens.filter(t => ['milk', 'bread', 'eggs', 'cheese', 'yoghurt', 'yogurt', 'coffee', 'oil', 'dal', 'dhal', 'rice', 'flour', 'butter', 'cream', 'juice'].includes(t));
@@ -550,18 +555,19 @@ export function rankRetailerResults(results: ProductResult[], query: string): Pr
         if (hasCoffeeAccessory) return false;
       }
       if (profile.unmatchedDistinctiveTokens.length > 0 && profile.queryTokens.length >= 3) {
-        // Only hard-filter if the product has NO match for ANY distinctive query token
-        // (allow partial brand matches — e.g. "Milklab Almond Milk" should match "Almond Milk 1L")
+        // Allow result if ANY distinctive token matches — don't require ALL of them.
+        // e.g. "Milklab Almond Milk" → product "Almond Milk 1L" should pass because "almond" + "milk" match
         const hasAnyDistinctiveMatch = profile.distinctiveQueryTokens.some((token) =>
           profile.productTokens.some((pt) => areTokensEquivalent(token, pt)) || profile.productText.includes(token)
         );
-        if (!hasAnyDistinctiveMatch) return false;
+        const hasEnoughCoverage = profile.matchedTokens.length >= Math.ceil(profile.queryTokens.length * 0.4);
+        if (!hasAnyDistinctiveMatch && !hasEnoughCoverage) return false;
       }
       if (profile.intent.anchorTokens.length > 0 && profile.matchedTokens.length === 0) return false;
       if (profile.queryTokens.length <= 1) return score > 0;
-      if (profile.queryTokens.length === 2) return profile.matchedTokens.length >= 1 && score > 10;
-      // 3+ word queries: require at least 1 token match (not 60% — too strict for brand queries)
-      return profile.matchedTokens.length >= 1 && score > 10;
+      if (profile.queryTokens.length === 2) return profile.matchedTokens.length >= 1 && score > 5;
+      // 3+ word queries: require at least 1 matched token and positive score
+      return profile.matchedTokens.length >= 1 && score > 5;
     })
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;

@@ -17,11 +17,11 @@ import {
   unique,
 } from './search-intelligence';
 
-const INITIAL_RETAILER_TIMEOUT_MS = 8000;
-const CORE_SUPERMARKET_TIMEOUT_MS = 10000;
-const RETRY_RETAILER_TIMEOUT_MS = 5000;
-const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 6000;
-const MAX_RETRY_VARIANTS = 4;
+const INITIAL_RETAILER_TIMEOUT_MS = 10000;
+const CORE_SUPERMARKET_TIMEOUT_MS = 12000;
+const RETRY_RETAILER_TIMEOUT_MS = 7000;
+const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 8000;
+const MAX_RETRY_VARIANTS = 6;
 const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Coles',
   'Woolworths',
@@ -184,15 +184,8 @@ function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductR
 
 function chooseCheapestValidMatch(ranked: ProductResult[], query: string): ProductResult | null {
   if (ranked.length === 0) return null;
-  const bestScore = scoreProduct(ranked[0], query);
-  const bestProfile = tokenize(query).filter((token) => normalizeText(ranked[0].productName).includes(token));
-  const threshold = Math.max(bestScore - 12, 30);
-  const comparable = ranked.filter((result) => {
-    const score = scoreProduct(result, query);
-    if (score < threshold) return false;
-    const resultText = normalizeText(`${result.productName} ${result.unit ?? ''}`);
-    return bestProfile.every((token) => resultText.includes(token) || tokenize(query).length <= 2);
-  });
+  // Use a low threshold — any result with a token match is valid
+  const comparable = ranked.filter((result) => scoreProduct(result, query) > 0);
   return [...comparable].sort((a, b) => a.price - b.price)[0] ?? ranked[0];
 }
 
@@ -230,17 +223,9 @@ function getDistinctiveTokens(query: string): string[] {
 }
 
 function getRetryVariantsForRetailer(retailer: RetailerName, query: string, retryVariants: string[]): string[] {
-  if (!CORE_SUPERMARKET_RETAILERS.has(retailer)) return retryVariants;
-
-  const distinctiveTokens = getDistinctiveTokens(query);
-  if (distinctiveTokens.length === 0) return retryVariants;
-
-  const filtered = retryVariants.filter((variant) => {
-    const normalizedVariant = normalizeText(variant);
-    return distinctiveTokens.every((token) => normalizedVariant.includes(token));
-  });
-
-  return filtered.length > 0 ? filtered : [query];
+  // Always include all variants — filtering by brand token was too aggressive
+  // and caused zero retries for brand queries like "Milklab Almond Milk"
+  return retryVariants;
 }
 
 function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult[] {

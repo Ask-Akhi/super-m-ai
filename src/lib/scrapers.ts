@@ -30,39 +30,73 @@ const JSON_HEADERS = {
   'Sec-Fetch-Site': 'same-origin',
 };
 
+// ── Open Food Facts — free, unblocked product data ───────────────────────────
+export async function scrapeOpenFoodFacts(query: string): Promise<ScraperResult> {
+  try {
+    type OFFProduct = { product_name?: string; brands?: string; quantity?: string; image_url?: string; _id?: string };
+    type OFFResponse = { products?: OFFProduct[]; count?: number };
+    const data = await getJson<OFFResponse>(
+      `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&countries_tags=australia&page_size=8`,
+      { headers: { 'User-Agent': 'SuperMAI/1.0 (grocerywithai.com)' } },
+    );
+    const prods = data?.products ?? [];
+    if (!prods.length) return { retailer: 'Amazon AU', results: [], status: 'empty' };
+    const results: ProductResult[] = prods
+      .filter((p) => p.product_name)
+      .slice(0, 8)
+      .map((p) => ({
+        retailer: 'Amazon AU' as RetailerName,
+        productName: [p.brands, p.product_name, p.quantity].filter(Boolean).join(' ').trim(),
+        price: 0, // OFF has no price data
+        unit: p.quantity,
+        imageUrl: p.image_url ?? '',
+        productUrl: p._id ? `https://world.openfoodfacts.org/product/${p._id}` : 'https://world.openfoodfacts.org',
+        inStock: true,
+        onSale: false,
+        scrapedAt: ts(),
+        storeBranch: 'Open Food Facts',
+      }));
+    return results.length
+      ? { retailer: 'Amazon AU', results, status: 'ok' }
+      : { retailer: 'Amazon AU', results: [], status: 'empty' };
+  } catch (err) {
+    return { retailer: 'Amazon AU', results: [], status: 'error', message: String(err) };
+  }
+}
+
 // ── Google Shopping scraper (universal fallback for AU retailers) ─────────────
 export async function scrapeGoogleShopping(query: string, retailerDomain?: string): Promise<ScraperResult> {
   try {
-    const site = retailerDomain ? ` site:${retailerDomain}` : '';
-    const searchQuery = `${query} australia price${site}`;
-    const url = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}&tbm=shop&gl=au&hl=en-AU&num=10`;
+    const siteFilter = retailerDomain ? `+site%3A${retailerDomain}` : '';
+    const searchQuery = encodeURIComponent(`${query} australia`);
+    const url = `https://www.google.com/search?q=${searchQuery}${siteFilter}&tbm=shop&gl=au&hl=en-AU&num=10&safe=active`;
     const html = await get(url, {
       headers: {
-        ...BASE_HEADERS,
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Referer: 'https://www.google.com.au/',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-AU,en;q=0.9',
+        Referer: 'https://www.google.com.au/',
+        'Cache-Control': 'no-cache',
       },
+      timeout: 10000,
     });
     const $ = cheerio.load(html);
     const results: ProductResult[] = [];
 
-    // Google Shopping result cards
-    $('div.sh-dgr__content, .sh-pr__product-results-grid > div, [data-docid]').slice(0, 10).each((_, el) => {
-      const name = $(el).find('h3, .tAxDx, [class*="title"], .translate-content').first().text().trim();
-      const priceText = $(el).find('.a8Pemb, [class*="price"], .kHxwFf').first().text().trim();
+    $('div.sh-dgr__content, .sh-pr__product-results-grid > div, [data-docid], .g').slice(0, 10).each((_, el) => {
+      const name = $(el).find('h3, .tAxDx, [aria-label], .translate-content').first().text().trim();
+      const priceText = $(el).find('.a8Pemb, .kHxwFf, [class*="price"]').first().text().trim();
       const price = parsePrice(priceText);
-      const store = $(el).find('.aULzUe, .IuHnof, [class*="merchant"], [class*="store"]').first().text().trim();
-      const imgEl = $(el).find('img').first();
-      const imgSrc = imgEl.attr('src') ?? imgEl.attr('data-src') ?? '';
+      const store = $(el).find('.aULzUe, .IuHnof, [class*="merchant"]').first().text().trim();
       const href = $(el).find('a').first().attr('href') ?? '';
-      const productUrl = href.startsWith('http') ? href : href.startsWith('/url?') 
-        ? new URLSearchParams(href.slice(5)).get('q') ?? href 
+      const imgSrc = $(el).find('img').first().attr('src') ?? '';
+      const productUrl = href.startsWith('http') ? href
+        : href.startsWith('/url?') ? (new URLSearchParams(href.slice(5)).get('q') ?? `https://www.google.com${href}`)
         : `https://www.google.com${href}`;
 
-      if (name && price) {
+      if (name && price && price > 0.5) {
         results.push({
-          retailer: (store as RetailerName) || 'Amazon AU',
+          retailer: (store || 'Amazon AU') as RetailerName,
           productName: name,
           price,
           imageUrl: imgSrc.startsWith('data:') ? '' : imgSrc,
@@ -77,7 +111,7 @@ export async function scrapeGoogleShopping(query: string, retailerDomain?: strin
 
     return results.length
       ? { retailer: 'Amazon AU', results, status: 'ok' }
-      : { retailer: 'Amazon AU', results: [], status: 'empty', message: 'No Google Shopping results' };
+      : { retailer: 'Amazon AU', results: [], status: 'empty' };
   } catch (err) {
     return { retailer: 'Amazon AU', results: [], status: 'error', message: String(err) };
   }
