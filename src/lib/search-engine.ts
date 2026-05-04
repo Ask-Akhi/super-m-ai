@@ -131,19 +131,21 @@ function toRetailerStatus(result: ScraperResult, query: string): RetailerSearchS
 
 function buildInsights(query: string, ranked: ProductResult[], cheapest: ProductResult | null, statuses: RetailerSearchStatus[]): string[] {
   const insights: string[] = [];
+  // Use cheapest as headline, not ranked[0] (ranked[0] may be a multipack or best-match not cheapest)
+  const headlineMatch = cheapest ?? ranked[0] ?? null;
   const bestMatch = ranked[0] ?? null;
-  const nextMatch = ranked.find((result) => result.retailer !== bestMatch?.retailer);
+  const nextMatch = ranked.find((result) => result.retailer !== headlineMatch?.retailer);
   const foundRetailers = statuses.filter((status) => status.status === 'ok');
   const missingRetailers = statuses.filter((status) => status.status !== 'ok').map((status) => status.retailer);
 
-  if (bestMatch) {
-    insights.push(`${bestMatch.retailer} has the strongest match for "${query}" with ${bestMatch.productName}.`);
+  if (headlineMatch) {
+    insights.push(`Cheapest match for "${query}": ${headlineMatch.productName} at ${headlineMatch.retailer} for $${headlineMatch.price.toFixed(2)}${headlineMatch.unit ? ` (${headlineMatch.unit})` : ''}.`);
   }
-  if (cheapest && bestMatch && (cheapest.retailer !== bestMatch.retailer || cheapest.productName !== bestMatch.productName || cheapest.price !== bestMatch.price)) {
-    insights.push(`Cheapest valid offer is $${cheapest.price.toFixed(2)} at ${cheapest.retailer} for ${cheapest.productName}.`);
+  if (bestMatch && headlineMatch && (bestMatch.retailer !== headlineMatch.retailer || bestMatch.productName !== headlineMatch.productName)) {
+    insights.push(`Strongest overall match: ${bestMatch.productName} at ${bestMatch.retailer} for $${bestMatch.price.toFixed(2)}.`);
   }
-  if (bestMatch && nextMatch) {
-    insights.push(`Next closest match is ${nextMatch.retailer} at $${nextMatch.price.toFixed(2)} for ${nextMatch.productName}.`);
+  if (headlineMatch && nextMatch && nextMatch.retailer !== headlineMatch.retailer) {
+    insights.push(`Next option: ${nextMatch.retailer} at $${nextMatch.price.toFixed(2)} for ${nextMatch.productName}.`);
   }
   if (foundRetailers.length > 0) {
     insights.push(`Matched ${foundRetailers.length} of ${ALL_RETAILERS.length} retailers for "${query}" after retrying alternate product phrases.`);
@@ -160,17 +162,19 @@ function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductR
     return `I could not find a reliable live match for "${query}" across the retailer searches. Try adding the size, brand, or pack format, and keep in mind some stores may limit automated search coverage.`;
   }
 
-  const bestMatch = ranked[0];
+  // Headline = cheapest valid match (not necessarily highest-scored match)
+  const headlineMatch = cheapest ?? ranked[0];
   const retailerLeaders = statuses
     .filter((status) => status.status === 'ok')
     .map((status) => `${status.retailer} (${status.count})`);
-  const comparable = ranked.slice(0, 4).map((result) => `${result.retailer} $${result.price.toFixed(2)}`);
+  // Show prices sorted cheapest first
+  const comparable = [...ranked].sort((a, b) => a.price - b.price).slice(0, 4).map((result) => `${result.retailer} $${result.price.toFixed(2)}`);
   const summaryLines = [
-    `Best match for "${query}": ${bestMatch.productName} at ${bestMatch.retailer} for $${bestMatch.price.toFixed(2)}${bestMatch.unit ? ` (${bestMatch.unit})` : ''}.`,
+    `Best price for "${query}": ${headlineMatch.productName} at ${headlineMatch.retailer} for $${headlineMatch.price.toFixed(2)}${headlineMatch.unit ? ` (${headlineMatch.unit})` : ''}.`,
   ];
 
-  if (cheapest && (cheapest.retailer !== bestMatch.retailer || cheapest.productName !== bestMatch.productName || cheapest.price !== bestMatch.price)) {
-    summaryLines.push(`Best current price among valid matches: ${cheapest.productName} at ${cheapest.retailer} for $${cheapest.price.toFixed(2)}${cheapest.unit ? ` (${cheapest.unit})` : ''}.`);
+  if (cheapest && (cheapest.retailer !== headlineMatch.retailer || cheapest.productName !== headlineMatch.productName || cheapest.price !== headlineMatch.price)) {
+    summaryLines.push(`Also available: ${cheapest.productName} at ${cheapest.retailer} for $${cheapest.price.toFixed(2)}${cheapest.unit ? ` (${cheapest.unit})` : ''}.`);
   }
   if (comparable.length > 1) {
     summaryLines.push(`Closest prices: ${comparable.join(', ')}.`);

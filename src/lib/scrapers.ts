@@ -215,7 +215,7 @@ function parsePrice(t: string): number | null {
 function ts() { return new Date().toISOString(); }
 
 function absoluteUrl(base: string, value?: string): string {
-  if (!value) return base;
+  if (!value || value.trim() === '') return '';  // no image — don't return homepage URL
   if (value.startsWith('http')) return value;
   return `${base}${value.startsWith('/') ? '' : '/'}${value}`;
 }
