@@ -5,6 +5,9 @@ import { getPriceHistory } from '@/lib/db';
 import { PriceTrendPoint, ProductResult, RetailerName } from '@/types';
 import { generateTrendData, normalizeTrendDate, normalizeTrendPoints } from '@/lib/trends';
 
+// Allow up to 20s for this route on Vercel/Render (default is 15s)
+export const maxDuration = 20;
+
 // Vague single-word or brand-ambiguous queries that need clarification
 const VAGUE_PATTERNS = [
   /^(milk|bread|eggs?|cheese|butter|yogh?urt|coffee|tea|juice|water|oil|sauce|pasta|rice|flour|sugar|salt|cereal|chips|chocolate|biscuits?|crackers?|nuts?)$/i,

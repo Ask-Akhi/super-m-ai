@@ -17,11 +17,11 @@ import {
   unique,
 } from './search-intelligence';
 
-const INITIAL_RETAILER_TIMEOUT_MS = 10000;
-const CORE_SUPERMARKET_TIMEOUT_MS = 12000;
-const RETRY_RETAILER_TIMEOUT_MS = 7000;
-const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 8000;
-const MAX_RETRY_VARIANTS = 6;
+const INITIAL_RETAILER_TIMEOUT_MS = 8000;
+const CORE_SUPERMARKET_TIMEOUT_MS = 10000;
+const RETRY_RETAILER_TIMEOUT_MS = 6000;
+const CORE_SUPERMARKET_RETRY_TIMEOUT_MS = 7000;
+const MAX_RETRY_VARIANTS = 4; // fewer variants = fewer parallel fetches but still covers common cases
 const RETRYABLE_RETAILERS = new Set<RetailerName>([
   'Coles',
   'Woolworths',
@@ -277,40 +277,56 @@ function resolveBestMatch(ranked: ProductResult[], query: string): ProductResult
   ];
 }
 
+// Hard wall-clock guard: if the whole search takes longer than this, return what we have
+const GLOBAL_SEARCH_TIMEOUT_MS = 14000;
+
 export async function runSmartSearch(query: string): Promise<SearchResponse> {
+  const searchStarted = Date.now();
+
   const initialResults = await Promise.all(
     ALL_RETAILERS.map((retailer) => timeboxedRetailerSearch(retailer, query, getInitialTimeoutForRetailer(retailer))),
   );
 
+  // If we're already close to the global timeout, skip retries entirely
+  const elapsed = Date.now() - searchStarted;
+  const timeLeftForRetries = GLOBAL_SEARCH_TIMEOUT_MS - elapsed;
+
   const successfulResults = initialResults.flatMap((result) => rankRetailerResults(result.results, query).slice(0, 2));
   const hasBrandSignal = hasDistinctiveBrandSignal(query);
-  // Retry any retailer that failed, was blocked, or returned empty
+  // Build retry variants once — shared across all retailers
   const retryVariants = unique([
     ...generateQueryVariants(query),
     ...buildDerivedQueries(query, successfulResults),
     ...buildDerivedQueries(query, initialResults.flatMap((result) => result.results).filter((result) => tokenize(result.productName).some((token) => tokenize(query).includes(token))).slice(0, 8)),
-  ]).slice(0, MAX_RETRY_VARIANTS);
+  ])
+    .filter((v) => normalizeText(v) !== normalizeText(query))
+    .slice(0, MAX_RETRY_VARIANTS);
 
+  // PHASE 2: Parallel retries — all variants for a retailer fire simultaneously
   const finalResults = await Promise.all(initialResults.map(async (initial) => {
     const hasGoodResults = rankRetailerResults(initial.results, query).length > 0;
     if (hasGoodResults) return initial;
     if (!RETRYABLE_RETAILERS.has(initial.retailer)) return initial;
-    if (retryVariants.length <= 1) return initial;
+    if (retryVariants.length === 0) return initial;
+    // Skip retries if we're nearly out of time
+    if (timeLeftForRetries < 2000) return initial;
 
     const retailerRetryVariants = hasBrandSignal
       ? getRetryVariantsForRetailer(initial.retailer, query, retryVariants)
       : retryVariants;
 
-    const attempts: ScraperResult[] = [initial];
-    for (const variant of retailerRetryVariants) {
-      if (normalizeText(variant) === normalizeText(query)) continue;
-      const retryTimeout = CORE_SUPERMARKET_RETAILERS.has(initial.retailer) ? CORE_SUPERMARKET_RETRY_TIMEOUT_MS : RETRY_RETAILER_TIMEOUT_MS;
-      const retry = await timeboxedRetailerSearch(initial.retailer, variant, retryTimeout);
-      attempts.push(retry);
-      if (rankRetailerResults(retry.results, query).length > 0) break;
-    }
+    // Cap per-retry timeout so we don't blow past the global guard
+    const retryTimeout = Math.min(
+      CORE_SUPERMARKET_RETAILERS.has(initial.retailer) ? CORE_SUPERMARKET_RETRY_TIMEOUT_MS : RETRY_RETAILER_TIMEOUT_MS,
+      Math.max(timeLeftForRetries - 500, 1000),
+    );
 
-    const bestAttempt = pickBestAttempt(attempts, query);
+    // Fire ALL variants in parallel — no sequential waiting
+    const retryAttempts = await Promise.all(
+      retailerRetryVariants.map((variant) => timeboxedRetailerSearch(initial.retailer, variant, retryTimeout)),
+    );
+
+    const bestAttempt = pickBestAttempt([initial, ...retryAttempts], query);
     if (rankRetailerResults(bestAttempt.results, query).length > 0) return bestAttempt;
 
     const cacheFallback = getCachedRetailerFallback(initial.retailer, retailerRetryVariants, query);
