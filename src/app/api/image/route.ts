@@ -12,6 +12,12 @@ const CDN_REFERER_MAP: Record<string, string> = {
   'media.harrisfarm.com.au': 'https://www.harrisfarm.com.au/',
   'images.igashop.com.au': 'https://www.igashop.com.au/',
   'assets.bigw.com.au': 'https://www.bigw.com.au/',
+  // Officeworks — images served from www.officeworks.com.au or their CDN subdomain
+  'officeworks.com.au': 'https://www.officeworks.com.au/',
+  'www.officeworks.com.au': 'https://www.officeworks.com.au/',
+  // Amazon AU product images
+  'images-na.ssl-images-amazon.com': 'https://www.amazon.com.au/',
+  'm.media-amazon.com': 'https://www.amazon.com.au/',
 };
 
 function getRefererForUrl(urlStr: string): string {

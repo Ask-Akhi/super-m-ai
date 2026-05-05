@@ -134,17 +134,21 @@ function buildInsights(query: string, ranked: ProductResult[], cheapest: Product
   // Use cheapest as headline, not ranked[0] (ranked[0] may be a multipack or best-match not cheapest)
   const headlineMatch = cheapest ?? ranked[0] ?? null;
   const bestMatch = ranked[0] ?? null;
+  const topScore = bestMatch ? scoreProduct(bestMatch, query) : 0;
+  const isLowConfidence = topScore < SUMMARY_MIN_SCORE;
   const nextMatch = ranked.find((result) => result.retailer !== headlineMatch?.retailer);
   const foundRetailers = statuses.filter((status) => status.status === 'ok');
   const missingRetailers = statuses.filter((status) => status.status !== 'ok').map((status) => status.retailer);
 
-  if (headlineMatch) {
+  if (isLowConfidence) {
+    insights.push(`Low confidence: the top result scored ${topScore} — no strong match found for "${query}". Consider adding brand, size, or refining your search.`);
+  } else if (headlineMatch) {
     insights.push(`Cheapest match for "${query}": ${headlineMatch.productName} at ${headlineMatch.retailer} for $${headlineMatch.price.toFixed(2)}${headlineMatch.unit ? ` (${headlineMatch.unit})` : ''}.`);
   }
-  if (bestMatch && headlineMatch && (bestMatch.retailer !== headlineMatch.retailer || bestMatch.productName !== headlineMatch.productName)) {
+  if (!isLowConfidence && bestMatch && headlineMatch && (bestMatch.retailer !== headlineMatch.retailer || bestMatch.productName !== headlineMatch.productName)) {
     insights.push(`Strongest overall match: ${bestMatch.productName} at ${bestMatch.retailer} for $${bestMatch.price.toFixed(2)}.`);
   }
-  if (headlineMatch && nextMatch && nextMatch.retailer !== headlineMatch.retailer) {
+  if (!isLowConfidence && headlineMatch && nextMatch && nextMatch.retailer !== headlineMatch.retailer) {
     insights.push(`Next option: ${nextMatch.retailer} at $${nextMatch.price.toFixed(2)} for ${nextMatch.productName}.`);
   }
   if (foundRetailers.length > 0) {
@@ -157,9 +161,18 @@ function buildInsights(query: string, ranked: ProductResult[], cheapest: Product
   return insights;
 }
 
+const SUMMARY_MIN_SCORE = 20; // results below this are too weak to describe confidently
+
 function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductResult | null, statuses: RetailerSearchStatus[]): string {
   if (ranked.length === 0) {
     return `I could not find a reliable live match for "${query}" across the retailer searches. Try adding the size, brand, or pack format, and keep in mind some stores may limit automated search coverage.`;
+  }
+
+  // If the best match scores too low, hedge rather than hallucinate
+  const topScore = scoreProduct(ranked[0], query);
+  if (topScore < SUMMARY_MIN_SCORE) {
+    const suggestions = ranked.slice(0, 3).map((r) => `"${r.productName}" at ${r.retailer} ($${r.price.toFixed(2)})`).join('; ');
+    return `I couldn't find a confident match for "${query}". The closest results were: ${suggestions}. Try refining your search with the brand name, size (e.g. 1L, 500g), or pack format.`;
   }
 
   // Headline = cheapest valid match (not necessarily highest-scored match)
@@ -188,8 +201,10 @@ function buildSummary(query: string, ranked: ProductResult[], cheapest: ProductR
 
 function chooseCheapestValidMatch(ranked: ProductResult[], query: string): ProductResult | null {
   if (ranked.length === 0) return null;
-  // Use a low threshold — any result with a token match is valid
-  const comparable = ranked.filter((result) => scoreProduct(result, query) > 0);
+  const bestScore = scoreProduct(ranked[0], query);
+  // Only include results within 20 points of the top scorer as "comparable cheapest"
+  const threshold = Math.max(bestScore - 20, SUMMARY_MIN_SCORE);
+  const comparable = ranked.filter((result) => scoreProduct(result, query) >= threshold);
   return [...comparable].sort((a, b) => a.price - b.price)[0] ?? ranked[0];
 }
 
