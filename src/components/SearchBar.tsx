@@ -46,7 +46,7 @@ export default function SearchBar() {
         return;
       }
       setResults(data.results, data.cheapest, data.summary, data.retailerStatuses, data.insights);
-      if (data.trendData) setTrendData(data.trendData);
+      if (data.trendData) setTrendData(data.trendData, (data as { trendSource?: 'db' | 'simulated' | 'empty' }).trendSource ?? 'simulated');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {

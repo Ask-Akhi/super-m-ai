@@ -1,0 +1,7 @@
+name = "superm-scraper-proxy"
+main = "worker.js"
+compatibility_date = "2026-05-03"
+
+[vars]
+# Set this in Cloudflare Workers secrets instead of checking it into git:
+# SCRAPER_PROXY_TOKEN = "replace-me"

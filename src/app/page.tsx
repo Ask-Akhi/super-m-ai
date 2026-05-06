@@ -13,7 +13,7 @@ import ReceiptScanner from '@/components/ReceiptScanner';
 import { RETAILERS } from '@/lib/retailers';
 
 export default function Home() {
-  const { results, cheapest, isLoading, error, selectedRetailers, trendData, retailerStatuses } = useSearchStore();
+  const { results, cheapest, isLoading, error, selectedRetailers, trendData, trendSource, retailerStatuses } = useSearchStore();
 
   const filteredResults = results.filter((r) => selectedRetailers.includes(r.retailer));
   const filteredCheapest = (cheapest && selectedRetailers.includes(cheapest.retailer))
@@ -114,7 +114,7 @@ export default function Home() {
                       priceRange={priceRange}
                     />
                   )}
-                  {trendData.length > 0 && <PriceTrendChart trendData={trendData} />}
+                  {trendData.length > 0 && <PriceTrendChart trendData={trendData} source={trendSource} />}
                   <ResultsGrid results={filteredResults} cheapest={filteredCheapest} />
                   {retailerStatuses.length > 0 && <RetailerCoverage />}
                 </div>

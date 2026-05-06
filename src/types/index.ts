@@ -77,10 +77,10 @@ export interface SearchState {
   results: ProductResult[];
   cheapest: ProductResult | null;
   summary: string;
-  insights: string[];
-  error: string | null;
+  insights: string[];  error: string | null;
   selectedRetailers: RetailerName[];
   trendData: PriceTrendPoint[];
+  trendSource: 'db' | 'simulated' | 'empty';
   retailerStatuses: RetailerSearchStatus[];
   clarificationOptions: string[] | null;
   setQuery: (q: string) => void;
@@ -94,7 +94,7 @@ export interface SearchState {
   ) => void;
   setError: (e: string | null) => void;
   toggleRetailer: (r: RetailerName) => void;
-  setTrendData: (d: PriceTrendPoint[]) => void;
+  setTrendData: (d: PriceTrendPoint[], source?: 'db' | 'simulated' | 'empty') => void;
   setClarification: (opts: string[] | null) => void;
   reset: () => void;
 }

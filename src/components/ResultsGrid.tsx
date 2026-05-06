@@ -8,15 +8,13 @@ interface Props {
 }
 
 export default function ResultsGrid({ results, cheapest }: Props) {
-  if (results.length === 0) return null;
-  const getImageSrc = (imageUrl?: string) => {
-    if (!imageUrl) return '/api/image?url=';
+  if (results.length === 0) return null;  const getImageSrc = (imageUrl?: string) => {
+    if (!imageUrl || imageUrl.trim() === '') return null;
     if (imageUrl.startsWith('/api/image?url=')) return imageUrl;
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      return `/api/image?url=${encodeURIComponent(imageUrl)}`;
-    }
-    // protocol-relative or relative — still proxy it
-    return `/api/image?url=${encodeURIComponent(imageUrl)}`;
+    // Any http(s) or protocol-relative URL — proxy it
+    return `/api/image?url=${encodeURIComponent(
+      imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl
+    )}`;
   };
 
   return (
@@ -72,12 +70,27 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                 )}
               </div>              {/* Product image — always shown; proxy returns placeholder SVG on failure */}
               <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={getImageSrc(r.imageUrl)}
-                  alt={r.productName}
-                  className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
-                />
+                {getImageSrc(r.imageUrl) ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={getImageSrc(r.imageUrl)!}
+                    alt={r.productName}
+                    className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                      const parent = target.parentElement;
+                      if (parent && !parent.querySelector('.img-placeholder')) {
+                        const ph = document.createElement('span');
+                        ph.className = 'img-placeholder text-4xl';
+                        ph.textContent = retailer?.logo ?? '🛒';
+                        parent.appendChild(ph);
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="text-4xl">{retailer?.logo ?? '🛒'}</span>
+                )}
               </div>
 
               {/* Product name */}

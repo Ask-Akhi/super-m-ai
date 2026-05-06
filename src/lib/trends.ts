@@ -42,14 +42,24 @@ export function normalizeTrendPoints(trendData: PriceTrendPoint[]): PriceTrendPo
 }
 
 // In a production app this would query a database.
-// Here we generate realistic mock historical data from a baseline price.
+// Generates deterministic (not random) mock data so the chart is stable across
+// server-side renders and page reloads. Uses a simple hash of retailer+week.
+function deterministicVariation(retailer: string, weekOffset: number): number {
+  let hash = 0;
+  const seed = `${retailer}:${weekOffset}`;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  // Map to ±8% range
+  return ((hash % 1000) / 1000 - 0.5) * 0.16;
+}
+
 export function generateTrendData(results: ProductResult[]): PriceTrendPoint[] {
   if (results.length === 0) return [];
 
   const today = new Date();
   const trendPoints: PriceTrendPoint[] = [];
 
-  // Build one entry per retailer per week for the last 12 weeks
   const retailerMap = new Map<RetailerName, number>();
   for (const r of results) {
     if (!retailerMap.has(r.retailer)) {
@@ -61,9 +71,8 @@ export function generateTrendData(results: ProductResult[]): PriceTrendPoint[] {
     for (let week = 11; week >= 0; week--) {
       const date = new Date(today);
       date.setDate(date.getDate() - week * 7);
-      // Simulate a ±15% historical variation
-      const variation = (Math.random() - 0.5) * 0.3 * currentPrice;
-      const historicalPrice = Math.max(0.5, parseFloat((currentPrice + variation).toFixed(2)));
+      const variation = deterministicVariation(retailer, week);
+      const historicalPrice = Math.max(0.5, parseFloat((currentPrice * (1 + variation)).toFixed(2)));
       trendPoints.push({
         date: date.toISOString().split('T')[0],
         price: historicalPrice,

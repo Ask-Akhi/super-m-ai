@@ -35,6 +35,7 @@ export function getDb(): Database.Database {
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
   migrate(_db);
+  seedPriceHistory(_db);
   return _db;
 }
 
@@ -51,11 +52,11 @@ function migrate(db: Database.Database) {
       product_url   TEXT,
       image_url     TEXT,
       source        TEXT    NOT NULL CHECK(source IN ('scrape','receipt','manual')),
-      confidence    REAL    NOT NULL DEFAULT 1.0,   -- 0-1, receipts = 0.98, scrapes = 0.85
+      confidence    REAL    NOT NULL DEFAULT 1.0,
       in_stock      INTEGER NOT NULL DEFAULT 1,
       on_sale       INTEGER NOT NULL DEFAULT 0,
       observed_at   TEXT    NOT NULL,
-      week_bucket   TEXT    NOT NULL  -- ISO week e.g. "2026-W18" for easy trend grouping
+      week_bucket   TEXT    NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_pr_retailer_name ON price_records(retailer, product_name);
@@ -65,15 +66,15 @@ function migrate(db: Database.Database) {
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       retailer        TEXT    NOT NULL,
       product_name    TEXT    NOT NULL,
-      canonical_name  TEXT,               -- LLM-normalised name e.g. "Full Cream Milk 2L"
+      canonical_name  TEXT,
       current_price   REAL    NOT NULL,
       previous_price  REAL,
       price_source    TEXT    NOT NULL DEFAULT 'scrape',
       last_seen_at    TEXT    NOT NULL,
-      scraped_at      TEXT,               -- last successful scrape time
+      scraped_at      TEXT,
       receipt_count   INTEGER NOT NULL DEFAULT 0,
-      stale           INTEGER NOT NULL DEFAULT 0, -- 1 if last scrape > 7 days ago
-      predicted_price REAL,               -- fallback prediction
+      stale           INTEGER NOT NULL DEFAULT 0,
+      predicted_price REAL,
       prediction_confidence REAL,
       product_url     TEXT,
       image_url       TEXT,
@@ -84,12 +85,12 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_pc_retailer ON product_cache(retailer);
 
     CREATE TABLE IF NOT EXISTS receipt_submissions (
-      id              TEXT    PRIMARY KEY,  -- uuid
-      user_token      TEXT    NOT NULL,     -- anonymous session token
+      id              TEXT    PRIMARY KEY,
+      user_token      TEXT    NOT NULL,
       retailer        TEXT,
       image_path      TEXT    NOT NULL,
       raw_ocr_text    TEXT,
-      parsed_items    TEXT,               -- JSON array of {name,price,qty}
+      parsed_items    TEXT,
       status          TEXT    NOT NULL DEFAULT 'pending'
                               CHECK(status IN ('pending','processing','done','failed')),
       items_validated INTEGER NOT NULL DEFAULT 0,
@@ -97,7 +98,106 @@ function migrate(db: Database.Database) {
       submitted_at    TEXT    NOT NULL,
       processed_at    TEXT
     );
+
+    -- Seeding sentinel: we only insert seed data once per DB file
+    CREATE TABLE IF NOT EXISTS _meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
+}
+
+// ── Seed realistic AU grocery price history (runs once per DB file) ──────────
+type SeedEntry = { retailer: RetailerName; product_name: string; basePrice: number };
+
+const SEED_PRODUCTS: SeedEntry[] = [
+  { retailer: 'Woolworths', product_name: 'Full Cream Milk 2L', basePrice: 3.50 },
+  { retailer: 'Coles',       product_name: 'Full Cream Milk 2L', basePrice: 3.50 },
+  { retailer: 'Aldi',        product_name: 'Full Cream Milk 2L', basePrice: 2.99 },
+  { retailer: 'Woolworths', product_name: 'Free Range Eggs 12 Pack', basePrice: 6.50 },
+  { retailer: 'Coles',       product_name: 'Free Range Eggs 12 Pack', basePrice: 6.00 },
+  { retailer: 'Aldi',        product_name: 'Free Range Eggs 12 Pack', basePrice: 5.49 },
+  { retailer: 'Woolworths', product_name: 'Almond Milk 1L', basePrice: 3.50 },
+  { retailer: 'Coles',       product_name: 'Almond Milk 1L', basePrice: 3.50 },
+  { retailer: 'Woolworths', product_name: 'Greek Yoghurt 1kg', basePrice: 5.50 },
+  { retailer: 'Coles',       product_name: 'Greek Yoghurt 1kg', basePrice: 5.00 },
+  { retailer: 'Woolworths', product_name: 'Sourdough Bread 700g', basePrice: 5.00 },
+  { retailer: 'Coles',       product_name: 'Sourdough Bread 700g', basePrice: 4.50 },
+  { retailer: 'Woolworths', product_name: 'Tasty Cheese Block 500g', basePrice: 7.00 },
+  { retailer: 'Coles',       product_name: 'Tasty Cheese Block 500g', basePrice: 6.50 },
+  { retailer: 'Aldi',        product_name: 'Tasty Cheese Block 500g', basePrice: 5.99 },
+  { retailer: 'Woolworths', product_name: 'Extra Virgin Olive Oil 750ml', basePrice: 10.00 },
+  { retailer: 'Coles',       product_name: 'Extra Virgin Olive Oil 750ml', basePrice: 9.50 },
+  { retailer: 'Woolworths', product_name: 'Instant Coffee 200g', basePrice: 12.00 },
+  { retailer: 'Coles',       product_name: 'Instant Coffee 200g', basePrice: 11.50 },
+  { retailer: 'Woolworths', product_name: 'Basmati Rice 5kg', basePrice: 14.00 },
+  { retailer: 'Coles',       product_name: 'Basmati Rice 5kg', basePrice: 13.50 },
+  { retailer: 'Aldi',        product_name: 'Basmati Rice 5kg', basePrice: 11.99 },
+];
+
+// Deterministic pseudo-random (seeded by week index + product index) so the
+// chart looks realistic without needing actual crypto or an external DB.
+function deterministicVariation(seed: number): number {
+  const x = Math.sin(seed + 1) * 10000;
+  return (x - Math.floor(x) - 0.5) * 0.16; // ±8% variation
+}
+
+function seedPriceHistory(db: Database.Database): void {
+  const already = (db.prepare(`SELECT value FROM _meta WHERE key = 'seeded'`).get() as { value: string } | undefined);
+  if (already) return; // Already seeded — don't re-insert on every restart
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO price_records
+      (retailer, product_name, price, source, confidence, in_stock, on_sale, observed_at, week_bucket)
+    VALUES
+      (@retailer, @product_name, @price, 'manual', 0.75, 1, @on_sale, @observed_at, @week_bucket)
+  `);
+
+  const upsertCache = db.prepare(`
+    INSERT INTO product_cache
+      (retailer, product_name, current_price, price_source, last_seen_at, receipt_count, stale)
+    VALUES (@retailer, @product_name, @price, 'manual', @last_seen_at, 0, 0)
+    ON CONFLICT(retailer, product_name) DO NOTHING
+  `);
+
+  const run = db.transaction(() => {
+    const now = new Date();
+    SEED_PRODUCTS.forEach((entry, productIdx) => {
+      for (let weekOffset = 11; weekOffset >= 0; weekOffset--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - weekOffset * 7);
+        const variation = deterministicVariation(productIdx * 100 + weekOffset);
+        const price = Math.max(0.50, parseFloat((entry.basePrice * (1 + variation)).toFixed(2)));
+        const weekBucket = isoWeek(date);
+        // ~20% chance of being on sale in a given week (deterministic)
+        const onSale = deterministicVariation(productIdx * 13 + weekOffset * 7) > 0.04 ? 0 : 1;
+        insert.run({
+          retailer: entry.retailer,
+          product_name: entry.product_name,
+          price,
+          on_sale: onSale,
+          observed_at: date.toISOString(),
+          week_bucket: weekBucket,
+        });
+        // Only upsert cache for the most recent week
+        if (weekOffset === 0) {
+          upsertCache.run({
+            retailer: entry.retailer,
+            product_name: entry.product_name,
+            price,
+            last_seen_at: date.toISOString(),
+          });
+        }
+      }
+    });
+    db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('seeded', '1')`).run();
+  });
+
+  try {
+    run();
+  } catch (err) {
+    console.warn('[db] seed failed (non-fatal):', err);
+  }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────

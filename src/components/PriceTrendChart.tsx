@@ -9,13 +9,15 @@ import { getTrendDataForChart } from '@/lib/trends';
 
 interface Props {
   trendData: PriceTrendPoint[];
+  source?: 'db' | 'simulated' | 'empty';
 }
 
-export default function PriceTrendChart({ trendData }: Props) {
+export default function PriceTrendChart({ trendData, source }: Props) {
   if (trendData.length === 0) return null;
 
   const chartData = getTrendDataForChart(trendData);
   const retailers = [...new Set(trendData.map((d) => d.retailer))];
+  const isReal = source === 'db';
 
   return (
     <div className="glass-card rounded-2xl p-6 w-full">
@@ -24,8 +26,8 @@ export default function PriceTrendChart({ trendData }: Props) {
           <h3 className="text-white font-semibold text-lg">📈 Price Trend</h3>
           <p className="text-slate-400 text-sm mt-0.5">Last 12 weeks across retailers</p>
         </div>
-        <span className="text-xs text-slate-500 bg-white/5 px-3 py-1 rounded-full border border-white/10">
-          Historical data
+        <span className={`text-xs px-3 py-1 rounded-full border ${isReal ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : 'text-slate-500 bg-white/5 border-white/10'}`}>
+          {isReal ? '✅ Real data' : '〰 Estimated trend'}
         </span>
       </div>
 

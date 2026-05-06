@@ -104,28 +104,33 @@ export async function POST(req: NextRequest) {
         // Non-fatal — DB write failures should not break the search response
         console.warn('[search] DB write failed:', dbErr instanceof Error ? dbErr.message : dbErr);
       }
-    }
-
-    // ── Build trend data from DB history (real 12-week data) ─
+    }    // ── Build trend data from DB history (real 12-week data) ─
     let trendData: PriceTrendPoint[] = [];
+    let trendSource: 'db' | 'simulated' = 'simulated';
     try {
       const firstResult = safeResults[0];
       if (firstResult) {
         const history = getPriceHistory(firstResult.productName, undefined, 12);
-        trendData = normalizeTrendPoints(history.map((h): PriceTrendPoint => ({
+        const dbTrend = normalizeTrendPoints(history.map((h): PriceTrendPoint => ({
           date: normalizeTrendDate(h.week_bucket) ?? h.week_bucket,
           price: Math.round(h.avg_price * 100) / 100,
           retailer: h.retailer as RetailerName,
         })));
+        if (dbTrend.length >= 2) {
+          trendData = dbTrend;
+          trendSource = 'db';
+        }
       }
 
       if (trendData.length < 2 && safeResults.length > 0) {
         trendData = generateTrendData(safeResults);
+        trendSource = 'simulated';
       }
     } catch (trendErr) {
       console.warn('[search] trend data failed:', trendErr instanceof Error ? trendErr.message : trendErr);
       if (safeResults.length > 0) {
         trendData = generateTrendData(safeResults);
+        trendSource = 'simulated';
       }
     }
 
@@ -134,6 +139,7 @@ export async function POST(req: NextRequest) {
       ...response,
       results: safeResults,
       trendData,
+      trendSource,
       meta: { durationMs, buildVersion },
     });
     apiResponse.headers.set('x-superm-build', buildVersion);
