@@ -1,4 +1,5 @@
 'use client';
+import { useState } from 'react';
 import { ProductResult } from '@/types';
 import { RETAILER_MAP } from '@/lib/retailers';
 
@@ -7,15 +8,45 @@ interface Props {
   cheapest: ProductResult | null;
 }
 
-export default function ResultsGrid({ results, cheapest }: Props) {
-  if (results.length === 0) return null;  const getImageSrc = (imageUrl?: string) => {
-    if (!imageUrl || imageUrl.trim() === '') return null;
-    if (imageUrl.startsWith('/api/image?url=')) return imageUrl;
-    // Any http(s) or protocol-relative URL — proxy it
+function ProductImage({ imageUrl, productName, retailerLogo }: {
+  imageUrl?: string;
+  productName: string;
+  retailerLogo: string;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  const getImageSrc = (value?: string) => {
+    if (!value || value.trim() === '') return null;
+    if (value.startsWith('/api/image?url=')) return value;
     return `/api/image?url=${encodeURIComponent(
-      imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl
+      value.startsWith('//') ? `https:${value}` : value,
     )}`;
   };
+
+  const src = getImageSrc(imageUrl);
+
+  return (
+    <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
+      {!src || failed ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+          <span className="text-4xl">{retailerLogo}</span>
+          <span className="text-xs text-slate-500">Image unavailable</span>
+        </div>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={productName}
+          className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+export default function ResultsGrid({ results, cheapest }: Props) {
+  if (results.length === 0) return null;
 
   return (
     <div className="w-full">
@@ -69,29 +100,7 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                   </span>
                 )}
               </div>              {/* Product image — always shown; proxy returns placeholder SVG on failure */}
-              <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
-                {getImageSrc(r.imageUrl) ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={getImageSrc(r.imageUrl)!}
-                    alt={r.productName}
-                    className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = 'none';
-                      const parent = target.parentElement;
-                      if (parent && !parent.querySelector('.img-placeholder')) {
-                        const ph = document.createElement('span');
-                        ph.className = 'img-placeholder text-4xl';
-                        ph.textContent = retailer?.logo ?? '🛒';
-                        parent.appendChild(ph);
-                      }
-                    }}
-                  />
-                ) : (
-                  <span className="text-4xl">{retailer?.logo ?? '🛒'}</span>
-                )}
-              </div>
+              <ProductImage imageUrl={r.imageUrl} productName={r.productName} retailerLogo={retailer?.logo ?? '🛒'} />
 
               {/* Product name */}
               <p className="text-sm text-slate-200 font-medium line-clamp-2 leading-snug group-hover:text-white transition-colors">

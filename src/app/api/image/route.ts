@@ -18,6 +18,8 @@ const CDN_REFERER_MAP: Record<string, string> = {
   'productimages.coles.com.au': 'https://www.coles.com.au/',
   'coles.com.au': 'https://www.coles.com.au/',
   'www.coles.com.au': 'https://www.coles.com.au/',
+  'harrisfarm.com.au': 'https://www.harrisfarm.com.au/',
+  'www.harrisfarm.com.au': 'https://www.harrisfarm.com.au/',
   'media.harrisfarm.com.au': 'https://www.harrisfarm.com.au/',
   'images.igashop.com.au': 'https://www.igashop.com.au/',
   'assets.bigw.com.au': 'https://www.bigw.com.au/',
