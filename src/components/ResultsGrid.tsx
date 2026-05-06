@@ -96,8 +96,7 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                   <div className="flex items-baseline gap-1.5">
                     <span className={`text-2xl font-bold ${isCheapest ? 'text-emerald-400' : 'text-white'}`}>
                       ${r.price.toFixed(2)}
-                    </span>
-                    {r.originalPrice && r.originalPrice > r.price && (
+                    </span>                    {r.originalPrice != null && r.originalPrice > r.price && (
                       <span className="text-sm text-slate-500 line-through">
                         ${r.originalPrice.toFixed(2)}
                       </span>
@@ -108,7 +107,7 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                     <p className="text-xs text-indigo-400">${r.pricePerUnit.toFixed(2)}/unit</p>
                   )}
                 </div>
-                {r.originalPrice && r.originalPrice > r.price && (
+                {r.originalPrice != null && r.originalPrice > r.price && (
                   <span className="text-sm font-bold text-red-400">
                     -{Math.round(((r.originalPrice - r.price) / r.originalPrice) * 100)}%
                   </span>

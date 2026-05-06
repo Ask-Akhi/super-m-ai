@@ -217,6 +217,7 @@ function ts() { return new Date().toISOString(); }
 function absoluteUrl(base: string, value?: string): string {
   if (!value || value.trim() === '') return '';  // no image — don't return homepage URL
   if (value.startsWith('http')) return value;
+  if (value.startsWith('//')) return `https:${value}`;  // protocol-relative URL (e.g. Coles)
   return `${base}${value.startsWith('/') ? '' : '/'}${value}`;
 }
 
