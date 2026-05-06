@@ -428,22 +428,72 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
 
 // ── ALDI ──────────────────────────────────────────────────────────────────────
 export async function scrapeAldi(query: string): Promise<ScraperResult> {
+  // Strategy 1: Aldi AU internal search API
+  try {
+    type AldiProduct = {
+      name?: string; title?: string; price?: number; formattedPrice?: string;
+      image?: string; imageUrl?: string; url?: string; link?: string;
+      isAvailable?: boolean; isSpecialBuy?: boolean;
+    };
+    type AldiResponse = { products?: AldiProduct[]; results?: AldiProduct[]; hits?: AldiProduct[] };
+
+    const data = await getJson<AldiResponse>(
+      `https://www.aldi.com.au/en/search/?text=${encodeURIComponent(query)}&ajax=true&format=json`,
+      {
+        headers: {
+          ...JSON_HEADERS,
+          Referer: `https://www.aldi.com.au/en/search/?text=${encodeURIComponent(query)}`,
+          Origin: 'https://www.aldi.com.au',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      },
+    );
+    const prods = data?.products ?? data?.results ?? data?.hits ?? [];
+    if (prods.length) {
+      const results: ProductResult[] = prods.slice(0, 8).map((p): ProductResult => {
+        const price = p.price ?? parsePrice(p.formattedPrice ?? '') ?? 0;
+        const href = p.url ?? p.link ?? '';
+        return {
+          retailer: 'Aldi',
+          productName: p.name ?? p.title ?? '',
+          price,
+          imageUrl: absoluteUrl('https://www.aldi.com.au', p.imageUrl ?? p.image ?? ''),
+          productUrl: href.startsWith('http') ? href : `https://www.aldi.com.au${href}`,
+          inStock: p.isAvailable ?? true,
+          onSale: !!p.isSpecialBuy,
+          scrapedAt: ts(),
+        };
+      }).filter((r) => r.productName && r.price > 0);
+      if (results.length) return { retailer: 'Aldi', results, status: 'ok' };
+    }
+  } catch { /* fall through to HTML */ }
+
+  // Strategy 2: HTML scrape with broader CSS selectors
   try {
     const html = await get(`https://www.aldi.com.au/en/search/?text=${encodeURIComponent(query)}`,
       { headers: { ...BASE_HEADERS, Referer: 'https://www.aldi.com.au/' } });
     const $ = cheerio.load(html);
     const results: ProductResult[] = [];
-    for (const sel of ['.search-result-items .item', '[class*="ProductCard"]', '.product__item', '[class*="search-result"] li']) {
+    for (const sel of [
+      '.search-result-items .item',
+      '[class*="ProductCard"]',
+      '[class*="product-card"]',
+      '.product__item',
+      '[class*="search-result"] li',
+      'article[class*="product"]',
+      '.plp-product',
+    ]) {
       $(sel).slice(0, 8).each((_, el) => {
-        const name = $(el).find('h3,h2,[class*="title"],[class*="name"]').first().text().trim();
-        const price = parsePrice($(el).find('[class*="price"]').first().text());
+        const name = $(el).find('h3,h2,[class*="title"],[class*="name"],[class*="heading"]').first().text().trim();
+        const price = parsePrice($(el).find('[class*="price"],[class*="Price"]').first().text());
         if (name && price) {
           const href = $(el).find('a').attr('href') ?? '';
           results.push({
             retailer: 'Aldi', productName: name, price,
             productUrl: href.startsWith('http') ? href : `https://www.aldi.com.au${href}`,
-            imageUrl: absoluteUrl('https://www.aldi.com.au', $(el).find('img').attr('src') ?? ''),
-            inStock: true, onSale: false, scrapedAt: ts(),
+            imageUrl: absoluteUrl('https://www.aldi.com.au', $(el).find('img').attr('src') ?? $(el).find('img').attr('data-src') ?? ''),
+            inStock: true, onSale: $(el).find('[class*="special"],[class*="sale"],[class*="Special"]').length > 0,
+            scrapedAt: ts(),
           });
         }
       });
@@ -451,7 +501,7 @@ export async function scrapeAldi(query: string): Promise<ScraperResult> {
     }
     return results.length
       ? { retailer: 'Aldi', results, status: 'ok' }
-      : { retailer: 'Aldi', results: [], status: 'empty', message: 'Aldi may not carry this item or requires JS' };
+      : { retailer: 'Aldi', results: [], status: 'empty', message: 'Aldi requires JavaScript rendering for search — item may not be stocked or is a seasonal Special Buy' };
   } catch (err) {
     return { retailer: 'Aldi', results: [], status: 'error', message: String(err) };
   }
@@ -459,46 +509,97 @@ export async function scrapeAldi(query: string): Promise<ScraperResult> {
 
 // ── IGA ───────────────────────────────────────────────────────────────────────
 export async function scrapeIGA(query: string): Promise<ScraperResult> {
+  type IGP = {
+    name?: string; title?: string; description?: string;
+    price?: number; regularPrice?: number; wasPrice?: number;
+    size?: string; unitOfSize?: string; brand?: string;
+    imageUrl?: string; mainImageUrl?: string; thumbnailImageUrl?: string;
+    url?: string; urlSlug?: string; productId?: string;
+    inStock?: boolean; onSale?: boolean; isOnSpecial?: boolean;
+  };
+  type IGAResponse = {
+    products?: IGP[]; items?: IGP[];
+    data?: { products?: IGP[]; items?: IGP[] };
+  };
+
+  const igaHeaders = { ...JSON_HEADERS, Referer: 'https://www.igashop.com.au/', Origin: 'https://www.igashop.com.au' };
+
+  // Strategy 1: Try multiple store IDs — different IGA stores stock different products
+  const storeIds = ['51172', '50923', '51138', '51003'];
+  for (const storeId of storeIds) {
+    try {
+      const data = await getJson<IGAResponse>(
+        `https://www.igashop.com.au/api/storefront/stores/${storeId}/search?misspelled=true&q=${encodeURIComponent(query)}&take=8`,
+        { headers: igaHeaders },
+      );
+      const raw = data?.products ?? data?.items ?? data?.data?.products ?? data?.data?.items ?? [];
+      if (raw.length) {
+        const results: ProductResult[] = raw.slice(0, 8).map((p) => ({
+          retailer: 'IGA' as RetailerName,
+          productName: p.name ?? p.title ?? '',
+          price: p.price ?? 0,
+          originalPrice: (p.regularPrice ?? p.wasPrice) && (p.regularPrice ?? p.wasPrice)! > (p.price ?? 0) ? (p.regularPrice ?? p.wasPrice) : undefined,
+          unit: p.size ? `${p.size}${p.unitOfSize ?? ''}` : undefined,
+          imageUrl: p.mainImageUrl ?? p.imageUrl ?? p.thumbnailImageUrl ?? '',
+          productUrl: p.url
+            ? (p.url.startsWith('http') ? p.url : `https://www.igashop.com.au${p.url}`)
+            : p.urlSlug
+              ? `https://www.igashop.com.au/product/${p.urlSlug}`
+              : 'https://www.igashop.com.au',
+          inStock: p.inStock ?? true,
+          onSale: !!(p.onSale ?? p.isOnSpecial),
+          scrapedAt: ts(),
+        })).filter((r) => r.productName && r.price > 0);
+        if (results.length) return { retailer: 'IGA', results, status: 'ok' };
+      }
+    } catch { /* try next store */ }
+  }
+
+  // Strategy 2: IGA catalogue search (broader, not store-specific)
   try {
-    type IGP = { name?: string; title?: string; price?: number; regularPrice?: number; size?: string; imageUrl?: string; url?: string; inStock?: boolean; onSale?: boolean };
-    const data = await getJson<{ products?: IGP[]; data?: { products?: IGP[] } }>(
-      `https://www.igashop.com.au/api/storefront/stores/51172/search?misspelled=true&q=${encodeURIComponent(query)}&take=8`,
-      { headers: { ...JSON_HEADERS, Referer: 'https://www.igashop.com.au/', Origin: 'https://www.igashop.com.au' } });
-    const raw = data?.products ?? data?.data?.products ?? [];
+    const data = await getJson<IGAResponse>(
+      `https://www.igashop.com.au/api/2.0/page/categories/search?q=${encodeURIComponent(query)}&page=1&pageSize=8`,
+      { headers: igaHeaders },
+    );
+    const raw = data?.products ?? data?.items ?? [];
     if (raw.length) {
       const results: ProductResult[] = raw.slice(0, 8).map((p) => ({
         retailer: 'IGA' as RetailerName,
         productName: p.name ?? p.title ?? '',
         price: p.price ?? 0,
-        originalPrice: p.regularPrice && p.regularPrice !== p.price ? p.regularPrice : undefined,
         unit: p.size,
-        imageUrl: p.imageUrl ?? '',
+        imageUrl: p.mainImageUrl ?? p.imageUrl ?? '',
         productUrl: p.url ? (p.url.startsWith('http') ? p.url : `https://www.igashop.com.au${p.url}`) : 'https://www.igashop.com.au',
         inStock: p.inStock ?? true,
-        onSale: !!p.onSale,
+        onSale: !!(p.onSale ?? p.isOnSpecial),
         scrapedAt: ts(),
       })).filter((r) => r.productName && r.price > 0);
       if (results.length) return { retailer: 'IGA', results, status: 'ok' };
     }
-  } catch { /* fall through to HTML */ }
+  } catch { /* fall through */ }
+
+  // Strategy 3: HTML fallback
   try {
     const html = await get(`https://www.igashop.com.au/search?q=${encodeURIComponent(query)}`,
       { headers: { ...BASE_HEADERS, Referer: 'https://www.igashop.com.au/' } });
     const $ = cheerio.load(html);
     const results: ProductResult[] = [];
-    $('[class*="product"],.product-tile,.product-card').slice(0, 8).each((_, el) => {
-      const name = $(el).find('[class*="name"],[class*="title"],h2,h3').first().text().trim();
-      const price = parsePrice($(el).find('[class*="price"]').first().text());
-      if (name && price) {
-        const href = $(el).find('a').attr('href') ?? '';
-        results.push({
-          retailer: 'IGA', productName: name, price,
-          productUrl: href.startsWith('http') ? href : `https://www.igashop.com.au${href}`,
-          imageUrl: absoluteUrl('https://www.igashop.com.au', $(el).find('img').attr('src') ?? ''),
-          inStock: true, onSale: false, scrapedAt: ts(),
-        });
-      }
-    });
+    for (const sel of ['[class*="product"]', '.product-tile', '.product-card', '[class*="ProductCard"]', 'li[class*="item"]']) {
+      $(sel).slice(0, 8).each((_, el) => {
+        const name = $(el).find('[class*="name"],[class*="title"],h2,h3').first().text().trim();
+        const price = parsePrice($(el).find('[class*="price"]').first().text());
+        if (name && price) {
+          const href = $(el).find('a').attr('href') ?? '';
+          results.push({
+            retailer: 'IGA', productName: name, price,
+            productUrl: href.startsWith('http') ? href : `https://www.igashop.com.au${href}`,
+            imageUrl: absoluteUrl('https://www.igashop.com.au', $(el).find('img').attr('src') ?? ''),
+            inStock: true, onSale: false, scrapedAt: ts(),
+          });
+        }
+      });
+      if (results.length) break;
+    }
     return results.length
       ? { retailer: 'IGA', results, status: 'ok' }
       : { retailer: 'IGA', results: [], status: 'empty', message: 'No IGA results' };
@@ -509,6 +610,41 @@ export async function scrapeIGA(query: string): Promise<ScraperResult> {
 
 // ── COSTCO ────────────────────────────────────────────────────────────────────
 export async function scrapeCostco(query: string): Promise<ScraperResult> {
+  // Strategy 1: Costco AU search API (JSON)
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await getJson<any>(
+      `https://www.costco.com.au/search?text=${encodeURIComponent(query)}&format=json&showAll=false&pageSize=8`,
+      {
+        headers: {
+          ...JSON_HEADERS,
+          Referer: `https://www.costco.com.au/search?text=${encodeURIComponent(query)}`,
+          Origin: 'https://www.costco.com.au',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      },
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const prods: any[] = data?.products ?? data?.results ?? data?.searchResultData?.products ?? [];
+    if (prods.length) {
+      const results: ProductResult[] = prods.slice(0, 8).map((p) => {
+        const price = p.yourPrice?.value ?? p.price ?? parsePrice(String(p.formattedPrice ?? '')) ?? 0;
+        return {
+          retailer: 'Costco' as RetailerName,
+          productName: p.name ?? p.title ?? '',
+          price,
+          imageUrl: absoluteUrl('https://www.costco.com.au', p.thumbnail ?? p.image ?? p.primaryImage ?? ''),
+          productUrl: absoluteUrl('https://www.costco.com.au', p.url ?? p.code ? `/p/${p.code}` : ''),
+          inStock: p.stock?.stockLevelStatus !== 'outOfStock' && p.purchasable !== false,
+          onSale: !!p.discountPercent || !!p.isOnSale,
+          scrapedAt: ts(),
+        };
+      }).filter((r) => r.productName && r.price > 0);
+      if (results.length) return { retailer: 'Costco', results, status: 'ok' };
+    }
+  } catch { /* fall through to HTML */ }
+
+  // Strategy 2: HTML + __NEXT_DATA__ / CSS selectors
   try {
     const html = await get(`https://www.costco.com.au/search?text=${encodeURIComponent(query)}`,
       { headers: { ...BASE_HEADERS, Referer: 'https://www.costco.com.au/' } });
@@ -554,7 +690,7 @@ export async function scrapeCostco(query: string): Promise<ScraperResult> {
     }
     return results.length
       ? { retailer: 'Costco', results, status: 'ok' }
-      : { retailer: 'Costco', results: [], status: 'empty', message: 'Costco may not stock this or requires login' };
+      : { retailer: 'Costco', results: [], status: 'empty', message: 'Costco may not stock this or requires member login' };
   } catch (err) {
     return { retailer: 'Costco', results: [], status: 'error', message: String(err) };
   }
@@ -562,11 +698,49 @@ export async function scrapeCostco(query: string): Promise<ScraperResult> {
 
 // ── HARRIS FARM ───────────────────────────────────────────────────────────────
 export async function scrapeHarrisFarm(query: string): Promise<ScraperResult> {
+  // Strategy 1: Shopify product JSON search endpoint (no JS required)
+  try {
+    type ShopifyProduct = {
+      title?: string; handle?: string; vendor?: string;
+      variants?: Array<{ price?: string; compare_at_price?: string; available?: boolean }>;
+      images?: Array<{ src?: string }>;
+      image?: { src?: string };
+    };
+    type ShopifySearchResponse = { resources?: { results?: { products?: ShopifyProduct[] } } };
+
+    const data = await getJson<ShopifySearchResponse>(
+      `https://www.harrisfarm.com.au/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=8&resources[options][unavailable_products]=last`,
+      { headers: { ...JSON_HEADERS, Referer: 'https://www.harrisfarm.com.au/', Origin: 'https://www.harrisfarm.com.au' } },
+    );
+    const prods = data?.resources?.results?.products ?? [];
+    if (prods.length) {
+      const results: ProductResult[] = prods.map((p): ProductResult => {
+        const variant = p.variants?.[0];
+        const price = variant?.price ? parseFloat(variant.price) : 0;
+        const wasPrice = variant?.compare_at_price ? parseFloat(variant.compare_at_price) : undefined;
+        return {
+          retailer: 'Harris Farm',
+          productName: p.title ?? '',
+          price,
+          originalPrice: wasPrice && wasPrice > price ? wasPrice : undefined,
+          imageUrl: absoluteUrl('https://www.harrisfarm.com.au', p.images?.[0]?.src ?? p.image?.src ?? ''),
+          productUrl: `https://www.harrisfarm.com.au/products/${p.handle ?? ''}`,
+          inStock: variant?.available ?? true,
+          onSale: !!(wasPrice && wasPrice > price),
+          scrapedAt: ts(),
+        };
+      }).filter((r) => r.productName && r.price > 0);
+      if (results.length) return { retailer: 'Harris Farm', results, status: 'ok' };
+    }
+  } catch { /* fall through */ }
+
+  // Strategy 2: Shopify collection search page with __NEXT_DATA__ / JSON-LD
   try {
     const html = await get(`https://www.harrisfarm.com.au/search?type=product&q=${encodeURIComponent(query)}`,
       { headers: { ...BASE_HEADERS, Referer: 'https://www.harrisfarm.com.au/' } });
     const $ = cheerio.load(html);
-    const results: ProductResult[] = [];
+
+    // Try __NEXT_DATA__ first
     const nd = $('#__NEXT_DATA__').html();
     if (nd) {
       try {
@@ -574,22 +748,25 @@ export async function scrapeHarrisFarm(query: string): Promise<ScraperResult> {
         const data = JSON.parse(nd) as any;
         const prods = data?.props?.pageProps?.products ?? data?.props?.pageProps?.searchResults ?? [];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        prods.slice(0, 8).forEach((p: any) => {
+        const mapped: ProductResult[] = prods.slice(0, 8).map((p: any) => {
           const price = p.priceMin ?? p.price ?? parsePrice(String(p.formattedPrice ?? ''));
-          if (p.title && price) {
-            results.push({
-              retailer: 'Harris Farm', productName: p.title, price,
-              imageUrl: absoluteUrl('https://www.harrisfarm.com.au', p.featuredImage?.url ?? ''),
-              productUrl: `https://www.harrisfarm.com.au${p.handle ? `/products/${p.handle}` : ''}`,
-              inStock: p.availableForSale ?? true,
-              onSale: !!p.compareAtPriceMin, scrapedAt: ts(),
-            });
-          }
-        });
-        if (results.length) return { retailer: 'Harris Farm', results, status: 'ok' };
-      } catch { /* fall through */ }
+          return {
+            retailer: 'Harris Farm' as RetailerName,
+            productName: p.title ?? '',
+            price,
+            imageUrl: absoluteUrl('https://www.harrisfarm.com.au', p.featuredImage?.url ?? ''),
+            productUrl: `https://www.harrisfarm.com.au${p.handle ? `/products/${p.handle}` : ''}`,
+            inStock: p.availableForSale ?? true,
+            onSale: !!p.compareAtPriceMin,
+            scrapedAt: ts(),
+          };
+        }).filter((r: ProductResult) => r.productName && r.price > 0);
+        if (mapped.length) return { retailer: 'Harris Farm', results: mapped, status: 'ok' };
+      } catch { /* fall through to CSS selectors */ }
     }
-    for (const sel of ['.product-item', '.grid-product', '[class*="ProductCard"]', '.product']) {
+
+    const results: ProductResult[] = [];
+    for (const sel of ['.product-item', '.grid-product', '[class*="ProductCard"]', '[class*="product-card"]', '.product']) {
       $(sel).slice(0, 8).each((_, el) => {
         const name = $(el).find('[class*="title"],[class*="name"],h2,h3').first().text().trim();
         const price = parsePrice($(el).find('[class*="price"]').first().text());
@@ -617,13 +794,19 @@ export async function scrapeHarrisFarm(query: string): Promise<ScraperResult> {
 
 // ── AMAZON AU ─────────────────────────────────────────────────────────────────
 export async function scrapeAmazon(query: string): Promise<ScraperResult> {
-  try {
-    const html = await get(`https://www.amazon.com.au/s?k=${encodeURIComponent(query)}&i=grocery`,
-      { headers: { ...BASE_HEADERS, Referer: 'https://www.amazon.com.au/' } });
+  const amazonHeaders = {
+    ...BASE_HEADERS,
+    Referer: 'https://www.amazon.com.au/',
+    'Accept-Language': 'en-AU,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+  };
+
+  const parseAmazonHtml = (html: string): ProductResult[] => {
     const $ = cheerio.load(html);
     const results: ProductResult[] = [];
     $('[data-component-type="s-search-result"]').slice(0, 8).each((_, el) => {
-      const name = $(el).find('h2 span').first().text().trim();
+      const name = $(el).find('h2 span').first().text().trim()
+        || $(el).find('[class*="product-title"]').first().text().trim();
       const whole = $(el).find('.a-price-whole').first().text().replace(/[^0-9]/g, '');
       const frac = $(el).find('.a-price-fraction').first().text().replace(/[^0-9]/g, '') || '00';
       const price = whole ? parseFloat(`${whole}.${frac}`) : null;
@@ -639,12 +822,22 @@ export async function scrapeAmazon(query: string): Promise<ScraperResult> {
         });
       }
     });
-    return results.length
-      ? { retailer: 'Amazon AU', results, status: 'ok' }
-      : { retailer: 'Amazon AU', results: [], status: 'empty', message: 'No Amazon AU grocery results' };
-  } catch (err) {
-    return { retailer: 'Amazon AU', results: [], status: 'error', message: String(err) };
+    return results;
+  };
+
+  // Try grocery department first, then pantry, then general search
+  for (const dept of ['grocery', 'pantry', '']) {
+    try {
+      const url = dept
+        ? `https://www.amazon.com.au/s?k=${encodeURIComponent(query)}&i=${dept}`
+        : `https://www.amazon.com.au/s?k=${encodeURIComponent(query)}`;
+      const html = await get(url, { headers: amazonHeaders });
+      const results = parseAmazonHtml(html);
+      if (results.length) return { retailer: 'Amazon AU', results, status: 'ok' };
+    } catch { /* try next dept */ }
   }
+
+  return { retailer: 'Amazon AU', results: [], status: 'empty', message: 'No Amazon AU grocery results' };
 }
 
 // ── TARGET ───────────────────────────────────────────────────────────────────

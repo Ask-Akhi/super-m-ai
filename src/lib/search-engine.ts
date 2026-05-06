@@ -155,7 +155,37 @@ function buildInsights(query: string, ranked: ProductResult[], cheapest: Product
     insights.push(`Matched ${foundRetailers.length} of ${ALL_RETAILERS.length} retailers for "${query}" after retrying alternate product phrases.`);
   }
   if (missingRetailers.length > 0) {
-    insights.push(`Live retailer lookup did not return a usable match from ${missingRetailers.join(', ')}. Those stores may be blocking automated search, timing out, or returning weak product data right now.`);
+    // Categorise missing retailers by likely reason rather than a flat vague list
+    const hardBlocked: RetailerName[] = ['Kmart', 'Chemist Warehouse', 'Priceline'];
+    const groceryOnly: RetailerName[] = ['Aldi', 'IGA', 'Costco', 'Harris Farm'];
+    const generalRetail: RetailerName[] = ['Target', 'Officeworks', 'Big W'];
+
+    const blocked = missingRetailers.filter((r) => hardBlocked.includes(r as RetailerName));
+    const notStocked = missingRetailers.filter((r) =>
+      groceryOnly.includes(r as RetailerName) &&
+      !statuses.find((s) => s.retailer === r && s.status === 'error')
+    );
+    const timedOut = missingRetailers.filter((r) =>
+      !hardBlocked.includes(r as RetailerName) &&
+      statuses.find((s) => s.retailer === r && (s.status === 'error' || (s.message ?? '').toLowerCase().includes('timed')))
+    );
+    const generalRetailMissing = missingRetailers.filter((r) =>
+      generalRetail.includes(r as RetailerName) &&
+      !timedOut.includes(r as RetailerName)
+    );
+
+    if (notStocked.length > 0) {
+      insights.push(`${notStocked.join(', ')} ${notStocked.length === 1 ? 'does' : 'do'} not appear to stock this item — or their live search returned no usable match for "${query}".`);
+    }
+    if (generalRetailMissing.length > 0) {
+      insights.push(`${generalRetailMissing.join(', ')} ${generalRetailMissing.length === 1 ? 'is a' : 'are'} general retailer${generalRetailMissing.length === 1 ? '' : 's'} — they may carry this product but it wasn't found in this search.`);
+    }
+    if (timedOut.length > 0) {
+      insights.push(`${timedOut.join(', ')} ${timedOut.length === 1 ? 'timed out' : 'timed out or errored'} during this search — try again or visit their site directly.`);
+    }
+    if (blocked.length > 0) {
+      insights.push(`${blocked.join(', ')} ${blocked.length === 1 ? 'blocks' : 'block'} automated price lookup. Visit their sites directly for current prices.`);
+    }
   }
 
   return insights;
