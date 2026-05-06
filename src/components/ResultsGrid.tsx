@@ -9,14 +9,14 @@ interface Props {
 
 export default function ResultsGrid({ results, cheapest }: Props) {
   if (results.length === 0) return null;
-
   const getImageSrc = (imageUrl?: string) => {
-    if (!imageUrl) return '';
+    if (!imageUrl) return '/api/image?url=';
     if (imageUrl.startsWith('/api/image?url=')) return imageUrl;
     if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
       return `/api/image?url=${encodeURIComponent(imageUrl)}`;
     }
-    return imageUrl;
+    // protocol-relative or relative — still proxy it
+    return `/api/image?url=${encodeURIComponent(imageUrl)}`;
   };
 
   return (
@@ -70,20 +70,15 @@ export default function ResultsGrid({ results, cheapest }: Props) {
                     🔥 Sale
                   </span>
                 )}
+              </div>              {/* Product image — always shown; proxy returns placeholder SVG on failure */}
+              <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={getImageSrc(r.imageUrl)}
+                  alt={r.productName}
+                  className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
+                />
               </div>
-
-              {/* Product image */}
-              {r.imageUrl && (
-                <div className="w-full h-40 rounded-[1.4rem] overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] flex items-center justify-center border border-white/10">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={getImageSrc(r.imageUrl)}
-                    alt={r.productName}
-                    className="max-h-full max-w-full object-contain p-3 transition-transform duration-200 group-hover:scale-[1.03]"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />
-                </div>
-              )}
 
               {/* Product name */}
               <p className="text-sm text-slate-200 font-medium line-clamp-2 leading-snug group-hover:text-white transition-colors">
