@@ -74,6 +74,7 @@ async function timeboxedRetailerSearch(
         results: [],
         status: 'error',
         message: `Timed out after ${Math.round(timeoutMs / 1000)}s`,
+        detailCode: 'timed_out',
       });
     }, timeoutMs);
   });
@@ -113,9 +114,10 @@ function getCachedRetailerFallback(retailer: RetailerName, variants: string[], q
 
   return {
     retailer,
-    results: rankedCachedResults,
+    results: rankedCachedResults.map((result) => ({ ...result, sourceType: 'cached_fallback' })),
     status: 'ok',
     message: 'Using cached retailer fallback because the live search returned no strong result.',
+    detailCode: 'cached_fallback',
   };
 }
 
@@ -126,6 +128,7 @@ function toRetailerStatus(result: ScraperResult, query: string): RetailerSearchS
     status: ranked.length > 0 ? 'ok' : (result.status === 'ok' ? 'empty' : result.status),
     count: ranked.slice(0, 4).length,
     message: result.message,
+    detailCode: result.detailCode,
   };
 }
 

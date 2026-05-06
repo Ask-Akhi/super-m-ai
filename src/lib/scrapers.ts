@@ -8,6 +8,7 @@ export interface ScraperResult {
   results: ProductResult[];
   status: 'ok' | 'empty' | 'blocked' | 'error';
   message?: string;
+  detailCode?: 'live_match' | 'no_catalog_match' | 'timed_out' | 'proxy_blocked' | 'rate_limited' | 'retailer_blocked' | 'indexed_fallback' | 'cached_fallback' | 'upstream_error' | 'general_retail_suppressed';
 }
 
 const BASE_HEADERS = {
@@ -146,6 +147,26 @@ async function postJson<T>(url: string, body: unknown, cfg?: AxiosRequestConfig)
 
 type ProxyMode = 'text' | 'json';
 
+function classifyScrapeFailure(err: unknown): { status: 'blocked' | 'error'; message: string; detailCode: ScraperResult['detailCode'] } {
+  const text = err instanceof Error ? err.message : String(err);
+  const normalized = text.toLowerCase();
+
+  if (normalized.includes('timed out') || normalized.includes('aborted') || normalized.includes('timeout')) {
+    return { status: 'error', message: 'Timed out while reaching the retailer.', detailCode: 'timed_out' };
+  }
+  if (normalized.includes('proxy upstream 403') || normalized.includes('proxy upstream 401')) {
+    return { status: 'blocked', message: 'The retailer blocked the deployed search path.', detailCode: 'proxy_blocked' };
+  }
+  if (normalized.includes('proxy upstream 429') || normalized.includes('429')) {
+    return { status: 'blocked', message: 'The retailer rate-limited this search request.', detailCode: 'rate_limited' };
+  }
+  if (normalized.includes('blocked automated access') || normalized.includes('blocks automated access')) {
+    return { status: 'blocked', message: text, detailCode: 'retailer_blocked' };
+  }
+
+  return { status: 'error', message: text, detailCode: 'upstream_error' };
+}
+
 async function proxyRequest<T>(
   method: 'GET' | 'POST',
   url: string,
@@ -219,6 +240,16 @@ function absoluteUrl(base: string, value?: string): string {
   if (value.startsWith('http')) return value;
   if (value.startsWith('//')) return `https:${value}`;  // protocol-relative URL (e.g. Coles)
   return `${base}${value.startsWith('/') ? '' : '/'}${value}`;
+}
+
+function getBestImageCandidate($el: { attr: (name: string) => string | undefined }): string {
+  const src = $el.attr('src') ?? '';
+  const dataSrc = $el.attr('data-src') ?? '';
+  const dataOriginal = $el.attr('data-original-src') ?? '';
+  const dataLazy = $el.attr('data-lazy-src') ?? '';
+  const srcset = $el.attr('srcset') ?? $el.attr('data-srcset') ?? '';
+  const srcsetFirst = srcset.split(',')[0]?.trim().split(' ')[0] ?? '';
+  return src || dataSrc || dataOriginal || dataLazy || srcsetFirst || '';
 }
 
 function normalizeSearchText(value: string): string {
@@ -305,7 +336,7 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
         onSale: !!p.pricing?.promotionType,
         scrapedAt: ts(),
       })).filter((r: ProductResult) => r.productName && r.price > 0);
-      if (results.length) return { retailer: 'Coles', results, status: 'ok' };
+      if (results.length) return { retailer: 'Coles', results: results.map((r) => ({ ...r, sourceType: 'live' })), status: 'ok', detailCode: 'live_match' };
     }
   } catch { /* fall through */ }
 
@@ -334,7 +365,7 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
           onSale: !!p.pricing?.promotionType,
           scrapedAt: ts(),
         })).filter((r: ProductResult) => r.productName && r.price > 0);
-        if (results.length) return { retailer: 'Coles', results, status: 'ok' };
+        if (results.length) return { retailer: 'Coles', results: results.map((r) => ({ ...r, sourceType: 'live' })), status: 'ok', detailCode: 'live_match' };
       }
 
       // HTML CSS selectors fallback
@@ -347,7 +378,7 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
             results.push({
               retailer: 'Coles', productName: name, price,
               productUrl: absoluteUrl('https://www.coles.com.au', $(el).find('a').attr('href') ?? ''),
-              imageUrl: absoluteUrl('https://www.coles.com.au', $(el).find('img').attr('src') ?? ''),
+              imageUrl: absoluteUrl('https://www.coles.com.au', getBestImageCandidate($(el).find('img').first())),
               inStock: true,
               onSale: $(el).find('[class*="special"],[class*="sale"]').length > 0,
               scrapedAt: ts(),
@@ -356,11 +387,12 @@ export async function scrapeColes(query: string): Promise<ScraperResult> {
         });
         if (results.length) break;
       }
-      if (results.length) return { retailer: 'Coles', results, status: 'ok' };
+      if (results.length) return { retailer: 'Coles', results: results.map((r) => ({ ...r, sourceType: 'live' })), status: 'ok', detailCode: 'live_match' };
     }
-    return { retailer: 'Coles', results: [], status: 'empty', message: 'No Coles results' };
+    return { retailer: 'Coles', results: [], status: 'empty', message: 'No Coles catalog match for this query.', detailCode: 'no_catalog_match' };
   } catch (err) {
-    return { retailer: 'Coles', results: [], status: 'error', message: String(err) };
+    const failure = classifyScrapeFailure(err);
+    return { retailer: 'Coles', results: [], status: failure.status, message: failure.message, detailCode: failure.detailCode };
   }
 }
 
@@ -415,15 +447,16 @@ export async function scrapeWoolworths(query: string): Promise<ScraperResult> {
         if (results.length) {
           return {
             retailer: 'Woolworths',
-            results,
+            results: results.map((r) => ({ ...r, sourceType: 'live' })),
             status: 'ok',
             message: variant !== query ? `Resolved via Woolworths variant "${variant}"` : undefined,
+            detailCode: 'live_match',
           };
         }
       }
     } catch { /* fall through to next variant */ }
   }
-  return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths results' };
+  return { retailer: 'Woolworths', results: [], status: 'empty', message: 'No Woolworths catalog match for this query.', detailCode: 'no_catalog_match' };
 }
 
 // ── ALDI ──────────────────────────────────────────────────────────────────────
@@ -491,7 +524,7 @@ export async function scrapeAldi(query: string): Promise<ScraperResult> {
           results.push({
             retailer: 'Aldi', productName: name, price,
             productUrl: href.startsWith('http') ? href : `https://www.aldi.com.au${href}`,
-            imageUrl: absoluteUrl('https://www.aldi.com.au', $(el).find('img').attr('src') ?? $(el).find('img').attr('data-src') ?? ''),
+            imageUrl: absoluteUrl('https://www.aldi.com.au', getBestImageCandidate($(el).find('img').first())),
             inStock: true, onSale: $(el).find('[class*="special"],[class*="sale"],[class*="Special"]').length > 0,
             scrapedAt: ts(),
           });
@@ -593,7 +626,7 @@ export async function scrapeIGA(query: string): Promise<ScraperResult> {
           results.push({
             retailer: 'IGA', productName: name, price,
             productUrl: href.startsWith('http') ? href : `https://www.igashop.com.au${href}`,
-            imageUrl: absoluteUrl('https://www.igashop.com.au', $(el).find('img').attr('src') ?? ''),
+          imageUrl: absoluteUrl('https://www.igashop.com.au', getBestImageCandidate($(el).find('img').first())),
             inStock: true, onSale: false, scrapedAt: ts(),
           });
         }
@@ -681,7 +714,7 @@ export async function scrapeCostco(query: string): Promise<ScraperResult> {
           results.push({
             retailer: 'Costco', productName: name, price,
             productUrl: absoluteUrl('https://www.costco.com.au', href),
-            imageUrl: absoluteUrl('https://www.costco.com.au', $(el).find('img').attr('src') ?? ''),
+            imageUrl: absoluteUrl('https://www.costco.com.au', getBestImageCandidate($(el).find('img').first())),
             inStock: true, onSale: false, scrapedAt: ts(),
           });
         }
@@ -775,7 +808,7 @@ export async function scrapeHarrisFarm(query: string): Promise<ScraperResult> {
           results.push({
             retailer: 'Harris Farm', productName: name, price,
             productUrl: absoluteUrl('https://www.harrisfarm.com.au', href),
-            imageUrl: absoluteUrl('https://www.harrisfarm.com.au', $(el).find('img').attr('src') ?? $(el).find('img').attr('data-src') ?? ''),
+            imageUrl: absoluteUrl('https://www.harrisfarm.com.au', getBestImageCandidate($(el).find('img').first())),
             inStock: !$(el).find('[class*="sold-out"],[class*="unavailable"]').length,
             onSale: $(el).find('[class*="sale"],[class*="discount"]').length > 0,
             scrapedAt: ts(),
@@ -854,7 +887,7 @@ export async function scrapeTarget(query: string): Promise<ScraperResult> {
         ?? card.find('a[href]').last().text().trim()
         ?? '';
       const href = card.find('a[href]').first().attr('href') ?? '';
-      const imageUrl = card.find('img').first().attr('src') ?? '';
+      const imageUrl = getBestImageCandidate(card.find('img').first());
       const priceText = card.find('[data-testid="product-price"]').text().replace(/\s+/g, ' ');
       const prices = [...priceText.matchAll(/\$([\d]+(?:\.\d{1,2})?)/g)].map((match) => parseFloat(match[1]));
       const price = prices[0] ?? null;
@@ -1046,7 +1079,7 @@ export async function scrapeBigW(query: string): Promise<ScraperResult> {
 
 // ── BLOCKED / HEAVILY PROTECTED RETAILERS ───────────────────────────────────
 function blockedRetailer(retailer: RetailerName, message: string): ScraperResult {
-  return { retailer, results: [], status: 'blocked', message };
+  return { retailer, results: [], status: 'blocked', message, detailCode: 'retailer_blocked' };
 }
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -1104,7 +1137,12 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
     try {
       const domain = RETAILER_DOMAIN[retailer];
       const gSearch = await scrapeGoogleShopping(query, domain);
-      const taggedResults = gSearch.results.map((r) => ({ ...r, retailer, storeBranch: 'via Google Shopping' }));
+      const taggedResults = gSearch.results.map((r) => ({
+        ...r,
+        retailer,
+        storeBranch: 'via Google Shopping',
+        sourceType: 'indexed_fallback' as const,
+      }));
       if (resultsContainDistinctiveTokens(query, taggedResults) || shouldTryStapleIndexedFallback) {
         // Tag results with correct retailer
         return {
@@ -1116,6 +1154,7 @@ export async function scrapeRetailerWithStatus(retailer: RetailerName, query: st
             : shouldTryBrandedIndexedFallback
               ? 'Results via indexed retailer fallback'
               : 'Results via staple retailer fallback',
+          detailCode: 'indexed_fallback',
         };
       }
     } catch { /* ignore */ }

@@ -35,6 +35,7 @@ export interface ProductResult {
   scrapedAt: string;
   storeLocation?: string;  // e.g. "Online · Free delivery $65+"
   storeBranch?: string;    // e.g. "Nationwide", "Sydney Metro"
+  sourceType?: 'live' | 'indexed_fallback' | 'cached_fallback' | 'general_retail_fallback';
 }
 
 export interface RetailerSearchStatus {
@@ -42,6 +43,7 @@ export interface RetailerSearchStatus {
   status: 'ok' | 'empty' | 'blocked' | 'error';
   count: number;
   message?: string;
+  detailCode?: 'live_match' | 'no_catalog_match' | 'timed_out' | 'proxy_blocked' | 'rate_limited' | 'retailer_blocked' | 'indexed_fallback' | 'cached_fallback' | 'upstream_error' | 'general_retail_suppressed';
 }
 
 export interface PriceTrendPoint {
